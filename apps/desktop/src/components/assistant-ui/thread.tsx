@@ -169,6 +169,7 @@ export const Thread: FC<{
     <GeneratedImageProvider>
       <div className="relative grid h-full min-h-0 max-w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-transparent contain-[layout_paint]">
         <VirtualizedThread
+          key={sessionKey ?? 'thread'}
           clampToComposer={clampToComposer}
           components={messageComponents}
           emptyPlaceholder={emptyPlaceholder}

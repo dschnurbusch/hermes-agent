@@ -80,6 +80,7 @@ const VirtualizedThreadInner: FC<VirtualizedThreadProps> = ({
   const isRunning = useAuiState(s => s.thread.isRunning)
 
   const groups = useMemo(() => buildGroups(messageSignature), [messageSignature])
+  const messageCount = messageSignature ? messageSignature.split('\n').length : 0
   const renderEmpty = groups.length === 0 && Boolean(emptyPlaceholder)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
 
@@ -185,13 +186,23 @@ const VirtualizedThreadInner: FC<VirtualizedThreadProps> = ({
                         className="composer-human-ai-pair-container relative flex min-w-0 flex-col gap-(--conversation-turn-gap)"
                         data-slot="aui_turn-pair"
                       >
-                        {group.indices.map(index => (
-                          <ThreadPrimitive.MessageByIndex components={components} index={index} key={index} />
-                        ))}
+                        {group.indices.map(index =>
+                          index >= 0 && index < messageCount ? (
+                            <ThreadPrimitive.MessageByIndex
+                              components={components}
+                              index={index}
+                              key={`${sessionKey ?? 'thread'}:${index}`}
+                            />
+                          ) : null
+                        )}
                       </div>
-                    ) : (
-                      <ThreadPrimitive.MessageByIndex components={components} index={group.index} />
-                    )}
+                    ) : group.index >= 0 && group.index < messageCount ? (
+                      <ThreadPrimitive.MessageByIndex
+                        components={components}
+                        index={group.index}
+                        key={`${sessionKey ?? 'thread'}:${group.index}`}
+                      />
+                    ) : null}
                   </div>
                 )
               })}
