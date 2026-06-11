@@ -877,6 +877,7 @@ export interface Translations {
     results: string
     pinned: string
     sessions: string
+    cronSessions: string
     cronJobs: string
     groupAriaGrouped: string
     groupAriaUngrouped: string

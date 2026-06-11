@@ -792,9 +792,10 @@ export function DesktopController() {
     }
   }, [gatewayState, refreshCurrentModel, refreshSessions])
 
-  // Keep the cron jobs section live without a user action: the scheduler ticks
-  // in the background (advancing next-run/state and creating runs), so poll the
-  // job list on an interval (and on tab re-focus) while connected.
+  // Keep the cron jobs section and cron run sessions live without a user action:
+  // the scheduler ticks in the background (advancing next-run/state and creating
+  // runs), so poll both the job list and the bounded cron-session slice on an
+  // interval (and on tab re-focus) while connected.
   useEffect(() => {
     if (gatewayState !== 'open') {
       return
@@ -803,6 +804,7 @@ export function DesktopController() {
     const tick = () => {
       if (document.visibilityState === 'visible') {
         void refreshCronJobs()
+        void refreshCronSessions()
       }
     }
 
@@ -813,7 +815,7 @@ export function DesktopController() {
       window.clearInterval(intervalId)
       document.removeEventListener('visibilitychange', tick)
     }
-  }, [gatewayState, refreshCronJobs])
+  }, [gatewayState, refreshCronJobs, refreshCronSessions])
 
   useEffect(() => {
     if (gatewayState === 'open' && !activeSessionId && freshDraftReady) {
