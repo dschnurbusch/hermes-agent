@@ -49,6 +49,7 @@ import {
   $pinnedSessionIds,
   $sidebarAgentsGrouped,
   $sidebarCronOpen,
+  $sidebarCronSessionsOpen,
   $sidebarMessagingOpenIds,
   $sidebarOpen,
   $sidebarOverlayMounted,
@@ -63,6 +64,7 @@ import {
   setPinnedSessionOrder,
   setSidebarAgentsGrouped,
   setSidebarCronOpen,
+  setSidebarCronSessionsOpen,
   setSidebarPinsOpen,
   setSidebarRecentsOpen,
   setSidebarSessionOrderIds,
@@ -336,6 +338,7 @@ export function ChatSidebar({
   const pinsOpen = useStore($sidebarPinsOpen)
   const agentsOpen = useStore($sidebarRecentsOpen)
   const cronOpen = useStore($sidebarCronOpen)
+  const cronSessionsOpen = useStore($sidebarCronSessionsOpen)
   const selectedSessionId = useStore($selectedStoredSessionId)
   const sessions = useStore($sessions)
   const cronSessions = useStore($cronSessions)
@@ -415,12 +418,22 @@ export function ChatSidebar({
     [sessions, showAllProfiles, profileScope]
   )
 
+  const visibleCronSessions = useMemo(
+    () => (showAllProfiles ? cronSessions : cronSessions.filter(s => normalizeProfileKey(s.profile) === profileScope)),
+    [cronSessions, showAllProfiles, profileScope]
+  )
+
   // Agent session order is pinned to creation time (started_at), NOT activity —
   // a new message must never float a session to the top. Position only changes
   // for a brand-new session or an explicit manual drag (agentOrderIds).
   const sortedSessions = useMemo(
     () => [...visibleSessions].sort((a, b) => (b.started_at || 0) - (a.started_at || 0)),
     [visibleSessions]
+  )
+
+  const sortedCronSessions = useMemo(
+    () => [...visibleCronSessions].sort((a, b) => sessionTime(b) - sessionTime(a)),
+    [visibleCronSessions]
   )
 
   const workingSessionIdSet = useMemo(() => new Set(workingSessionIds), [workingSessionIds])
@@ -431,9 +444,9 @@ export function ChatSidebar({
     const map = new Map<string, SessionInfo>()
 
     // Cron sessions are listed separately but can still be pinned, so index
-    // them too — otherwise a pinned cron job can't resolve into the Pinned
+    // them too — otherwise a pinned cron run can't resolve into the Pinned
     // section. Recents take precedence on id collisions (set last).
-    for (const s of [...cronSessions, ...visibleSessions]) {
+    for (const s of [...visibleCronSessions, ...visibleSessions]) {
       map.set(s.id, s)
 
       if (s._lineage_root_id && !map.has(s._lineage_root_id)) {
@@ -442,7 +455,7 @@ export function ChatSidebar({
     }
 
     return map
-  }, [visibleSessions, cronSessions])
+  }, [visibleSessions, visibleCronSessions])
 
   const pinnedSessions = useMemo(() => {
     const seen = new Set<string>()
@@ -518,6 +531,11 @@ export function ChatSidebar({
   const unpinnedAgentSessions = useMemo(
     () => sortedSessions.filter(s => !pinnedRealIdSet.has(s.id)),
     [sortedSessions, pinnedRealIdSet]
+  )
+
+  const unpinnedCronSessions = useMemo(
+    () => sortedCronSessions.filter(s => !pinnedRealIdSet.has(s.id)),
+    [sortedCronSessions, pinnedRealIdSet]
   )
 
   useEffect(() => {
@@ -762,7 +780,7 @@ export function ChatSidebar({
 
   const showSessionSkeletons = sessionsLoading && sortedSessions.length === 0
 
-  const showSessionSections = showSessionSkeletons || sortedSessions.length > 0
+  const showSessionSections = showSessionSkeletons || sortedSessions.length > 0 || sortedCronSessions.length > 0
 
   // Each reorderable list reports its OWN new id order; persisting is a direct,
   // typed write — no id-prefix sniffing to figure out which level moved.
@@ -1012,6 +1030,26 @@ export function ChatSidebar({
                 sessions={displayAgentSessions}
                 sortable={!showAllProfiles && agentSessions.length > 1}
                 tree={agentTree}
+                workingSessionIdSet={workingSessionIdSet}
+              />
+            )}
+
+            {!trimmedQuery && unpinnedCronSessions.length > 0 && (
+              <SidebarSessionsSection
+                activeSessionId={activeSidebarSessionId}
+                contentClassName={cn('flex max-h-44 flex-col gap-px rounded-lg pb-2 pt-1', GROUP_BODY)}
+                emptyState={null}
+                label={s.cronSessions}
+                labelMeta={String(unpinnedCronSessions.length)}
+                onArchiveSession={onArchiveSession}
+                onDeleteSession={onDeleteSession}
+                onResumeSession={onResumeSession}
+                onToggle={() => setSidebarCronSessionsOpen(!cronSessionsOpen)}
+                onTogglePin={pinSession}
+                open={cronSessionsOpen}
+                pinned={false}
+                rootClassName="shrink-0 p-0 pb-1"
+                sessions={unpinnedCronSessions}
                 workingSessionIdSet={workingSessionIdSet}
               />
             )}

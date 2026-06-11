@@ -57,4 +57,28 @@ describe('Hermes REST session helpers', () => {
       profile: 'xiaoxuxu'
     })
   })
+
+  it('serializes source filters for independently rendered sidebar slices', async () => {
+    await listAllProfileSessions(10, 1, 'exclude', 'recent', 'all', {
+      excludeSources: ['cron', 'telegram', 'discord']
+    })
+
+    expect(api).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path:
+          '/api/profiles/sessions?limit=10&offset=0&min_messages=1&archived=exclude&order=recent&profile=all' +
+          '&exclude_sources=cron%2Ctelegram%2Cdiscord'
+      })
+    )
+
+    await listAllProfileSessions(10, 1, 'exclude', 'recent', 'all', { source: 'cron' })
+
+    expect(api).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path:
+          '/api/profiles/sessions?limit=10&offset=0&min_messages=1&archived=exclude&order=recent&profile=all' +
+          '&source=cron'
+      })
+    )
+  })
 })
