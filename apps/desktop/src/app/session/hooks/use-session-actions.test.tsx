@@ -7,7 +7,6 @@ import { getSessionMessages, setSessionArchived } from '@/hermes'
 import { $pinnedSessionIds } from '@/store/layout'
 import { $activeGatewayProfile, $newChatProfile } from '@/store/profile'
 import {
-  $cronSessions,
   $currentCwd,
   $messages,
   $messagingPlatformTotals,
@@ -160,7 +159,6 @@ describe('createBackendSessionForSend profile routing', () => {
     $sessionsTotal.set(0)
     $messagingSessions.set([])
     $messagingPlatformTotals.set({})
-    $cronSessions.set([])
     $pinnedSessionIds.set([])
     vi.restoreAllMocks()
   })
@@ -331,7 +329,6 @@ describe('archiveSession sidebar stores', () => {
     $sessionsTotal.set(0)
     $messagingSessions.set([])
     $messagingPlatformTotals.set({})
-    $cronSessions.set([])
     $pinnedSessionIds.set([])
     vi.restoreAllMocks()
   })

@@ -15,7 +15,6 @@ import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding } from '@/store/onboarding'
 import { $activeGatewayProfile, $newChatProfile, $profiles, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import {
-  $cronSessions,
   $currentCwd,
   $currentFastMode,
   $currentModel,
@@ -29,7 +28,6 @@ import {
   setActiveSessionId,
   setAwaitingResponse,
   setBusy,
-  setCronSessions,
   setCurrentBranch,
   setCurrentCwd,
   setCurrentFastMode,
@@ -49,8 +47,8 @@ import {
   setSelectedStoredSessionId,
   setSessions,
   setSessionStartedAt,
-  setSessionUnread,
   setSessionsTotal,
+  setSessionUnread,
   setTurnStartedAt,
   setYoloActive,
   workspaceCwdForNewSession
@@ -231,8 +229,7 @@ function sessionMatchesStoredId(session: SessionInfo, storedSessionId: string): 
 function findSessionInSidebarStores(storedSessionId: string): SessionInfo | undefined {
   return (
     $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ??
-    $messagingSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ??
-    $cronSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+    $messagingSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
   )
 }
 
@@ -243,7 +240,6 @@ function removeSessionFromSidebarStores(storedSessionId: string, session?: Sessi
 
   setSessions(prev => prev.filter(candidate => !matches(candidate)))
   setMessagingSessions(prev => prev.filter(candidate => !matches(candidate)))
-  setCronSessions(prev => prev.filter(candidate => !matches(candidate)))
 
   const platform = normalizeSessionSource(session?.source)
   if (adjustTotals && platform && isMessagingSource(platform)) {
@@ -261,9 +257,7 @@ function removeSessionFromSidebarStores(storedSessionId: string, session?: Sessi
 function restoreSessionToSidebarStore(session: SessionInfo) {
   const withoutExisting = (candidate: SessionInfo) => !sessionMatchesStoredId(candidate, session.id)
 
-  if (session.source === 'cron') {
-    setCronSessions(prev => [session, ...prev.filter(withoutExisting)])
-  } else if (isMessagingSource(session.source)) {
+  if (isMessagingSource(session.source)) {
     setMessagingSessions(prev => [session, ...prev.filter(withoutExisting)])
     const platform = normalizeSessionSource(session.source)
     if (platform) {

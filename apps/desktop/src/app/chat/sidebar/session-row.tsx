@@ -175,8 +175,8 @@ export function SidebarSessionRow({
             >
               <SidebarRowDot
                 className="transition-opacity group-hover/handle:opacity-0 group-focus-within/handle:opacity-0"
-                isWorking={isWorking}
                 isUnread={isUnread}
+                isWorking={isWorking}
                 needsInput={needsInput}
               />
               <Codicon

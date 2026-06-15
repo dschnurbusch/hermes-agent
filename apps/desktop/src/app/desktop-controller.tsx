@@ -54,19 +54,17 @@ import {
   $gatewayState,
   $messages,
   $messagingSessions,
-  $resumeFailedSessionId,
   $resumeExhaustedSessionId,
+  $resumeFailedSessionId,
   $selectedStoredSessionId,
   $sessions,
   $workingSessionIds,
-  CRON_SECTION_LIMIT,
   getRecentlySettledSessionIds,
   mergeSessionPage,
   MESSAGING_SECTION_LIMIT,
   sessionPinId,
   setAwaitingResponse,
   setBusy,
-  setCronSessions,
   setCurrentBranch,
   setCurrentCwd,
   setCurrentModel,
@@ -137,25 +135,21 @@ const ProfilesView = lazy(async () => ({ default: (await import('./profiles')).P
 const SettingsView = lazy(async () => ({ default: (await import('./settings')).SettingsView }))
 const SkillsView = lazy(async () => ({ default: (await import('./skills')).SkillsView }))
 
-// Latest cron-job sessions surfaced in the collapsed "Cron jobs" section. The
-// Cron sessions are written by a background scheduler tick (the desktop
-// backend), so no user action signals the UI. Poll the bounded cron list on
-// this cadence while the app is open + visible so new runs surface promptly
-// instead of waiting for the next user-triggered refreshSessions().
-const CRON_POLL_INTERVAL_MS = 30_000
-// The recents list is local-only: cron rows have their own section, and each
-// messaging platform (telegram, discord, …) is fetched separately into its own
-// self-managed sidebar section (refreshMessagingSessions). Excluding both here
-// keeps "Load more" paging through interactive local chats instead of
-// interleaving gateway threads that bury them.
-const SIDEBAR_EXCLUDED_SOURCES = ['cron', 'subagent', 'tool', ...MESSAGING_SESSION_SOURCE_IDS]
+// Cron sessions are written by the background scheduler, so no user action
+// signals the renderer. Poll the normal recents stream on this cadence while
+// the app is visible so scheduled outputs appear in Sessions like inbox items.
+const SIDEBAR_POLL_INTERVAL_MS = 30_000
+// The recents list includes local/desktop sessions and cron run sessions.
+// Messaging platform conversations are fetched separately into self-managed
+// sections; implementation-only sources are hidden.
+const SIDEBAR_EXCLUDED_SOURCES = ['subagent', 'tool', ...MESSAGING_SESSION_SOURCE_IDS]
 // The messaging slice is the inverse: drop cron + every local source so only
 // external-platform conversations remain, then split per platform in the UI.
 const MESSAGING_EXCLUDED_SOURCES = ['cron', ...LOCAL_SESSION_SOURCE_IDS]
 
-// Cheap signature compare so the poll only swaps the atom (and re-renders the
-// sidebar) when the visible cron rows actually changed.
-function sameCronSignature(a: SessionInfo[], b: SessionInfo[]): boolean {
+// Cheap signature compare so polling only swaps atoms (and re-renders the
+// sidebar) when the visible rows actually changed.
+function sameSessionSignature(a: SessionInfo[], b: SessionInfo[]): boolean {
   if (a.length !== b.length) {
     return false
   }
@@ -349,21 +343,6 @@ export function DesktopController() {
     }
   }, [])
 
-  // Cron-job sessions as their own list (latest N). Independent of the recents
-  // page so the two never compete for slots. Cheap + bounded. Kept (even though
-  // the sidebar now lists cron *jobs*, not run sessions) so a pinned cron run
-  // still resolves into the Pinned section via sessionByAnyId.
-  const refreshCronSessions = useCallback(async () => {
-    try {
-      const { sessions } = await listAllProfileSessions(CRON_SECTION_LIMIT, 1, 'exclude', 'recent', 'all', {
-        source: 'cron'
-      })
-
-      setCronSessions(prev => (sameCronSignature(prev, sessions) ? prev : sessions))
-    } catch {
-      // Non-fatal: the cron section just stays empty/stale.
-    }
-  }, [])
 
   // Messaging-platform sessions as their own slice, fetched separately from
   // local recents so each platform renders a self-managed section and never
@@ -379,7 +358,7 @@ export function DesktopController() {
       // sources) — those stay in local recents, not a platform section.
       const rows = result.sessions.filter(s => isMessagingSource(s.source))
 
-      setMessagingSessions(prev => (sameCronSignature(prev, rows) ? prev : rows))
+      setMessagingSessions(prev => (sameSessionSignature(prev, rows) ? prev : rows))
       // Hit the cap → at least one platform may have more on disk than loaded,
       // so platform sections offer their own per-platform "load more".
       setMessagingTruncated(result.sessions.length >= MESSAGING_SECTION_LIMIT)
@@ -437,9 +416,8 @@ export function DesktopController() {
       // clutter the sidebar.
       // Unified cross-profile list (served read-only off each profile's
       // state.db; no per-profile backend is spawned). Single-profile users get
-      // the same rows tagged profile="default". Cron sessions are excluded here
-      // and fetched separately (refreshCronSessions) so the scheduler's
-      // always-newest rows can't consume the recents page budget.
+      // the same rows tagged profile="default". Cron sessions are first-class
+      // inbox rows here, so scheduled outputs appear in Sessions until archived.
       // Scope the fetch to the active profile (not always 'all') so a profile
       // with few recent sessions isn't windowed out of the cross-profile
       // recency page — the empty-history-on-profile-switch bug.
@@ -460,10 +438,9 @@ export function DesktopController() {
       }
     }
 
-    void refreshCronSessions()
     void refreshCronJobs()
     void refreshMessagingSessions()
-  }, [profileScope, refreshCronSessions, refreshCronJobs, refreshMessagingSessions])
+  }, [profileScope, refreshCronJobs, refreshMessagingSessions])
 
   const loadMoreSessions = useCallback(() => {
     bumpSessionsLimit()
@@ -854,10 +831,9 @@ export function DesktopController() {
     }
   }, [gatewayState, refreshCurrentModel, refreshSessions])
 
-  // Keep the cron jobs section and cron run sessions live without a user action:
-  // the scheduler ticks in the background (advancing next-run/state and creating
-  // runs), so poll both the job list and the bounded cron-session slice on an
-  // interval (and on tab re-focus) while connected.
+  // Keep cron jobs and scheduler-created run sessions live without a user
+  // action. The scheduler ticks in the background, so poll the normal Sessions
+  // inbox on an interval (and on tab re-focus) while connected.
   useEffect(() => {
     if (gatewayState !== 'open') {
       return
@@ -865,19 +841,18 @@ export function DesktopController() {
 
     const tick = () => {
       if (document.visibilityState === 'visible') {
-        void refreshCronJobs()
-        void refreshCronSessions()
+        void refreshSessions().catch(() => undefined)
       }
     }
 
-    const intervalId = window.setInterval(tick, CRON_POLL_INTERVAL_MS)
+    const intervalId = window.setInterval(tick, SIDEBAR_POLL_INTERVAL_MS)
     document.addEventListener('visibilitychange', tick)
 
     return () => {
       window.clearInterval(intervalId)
       document.removeEventListener('visibilitychange', tick)
     }
-  }, [gatewayState, refreshCronJobs, refreshCronSessions])
+  }, [gatewayState, refreshSessions])
 
   useEffect(() => {
     if (gatewayState === 'open' && !activeSessionId && freshDraftReady) {
