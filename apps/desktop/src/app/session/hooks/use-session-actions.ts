@@ -7,6 +7,7 @@ import { useI18n } from '@/i18n'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { normalizePersonalityValue } from '@/lib/chat-runtime'
 import { embeddedImageUrls, textWithoutEmbeddedImages } from '@/lib/embedded-images'
+import { isMessagingSource, normalizeSessionSource } from '@/lib/session-source'
 import { setSessionYolo } from '@/lib/yolo-session'
 import { clearQueuedPrompts } from '@/store/composer-queue'
 import { $pinnedSessionIds } from '@/store/layout'
@@ -14,14 +15,17 @@ import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding } from '@/store/onboarding'
 import { $activeGatewayProfile, $newChatProfile, $profiles, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import {
+  $cronSessions,
   $currentCwd,
   $messages,
+  $messagingSessions,
   $sessions,
   $yoloActive,
   sessionPinId,
   setActiveSessionId,
   setAwaitingResponse,
   setBusy,
+  setCronSessions,
   setCurrentBranch,
   setCurrentCwd,
   setCurrentFastMode,
@@ -34,6 +38,8 @@ import {
   setFreshDraftReady,
   setIntroSeed,
   setMessages,
+  setMessagingPlatformTotals,
+  setMessagingSessions,
   setSelectedStoredSessionId,
   setSessions,
   setSessionStartedAt,
@@ -212,6 +218,60 @@ function patchSessionWorkspace(sessionId: string, cwd: string | undefined) {
 
 function sessionMatchesStoredId(session: SessionInfo, storedSessionId: string): boolean {
   return session.id === storedSessionId || session._lineage_root_id === storedSessionId
+}
+
+function findSessionInSidebarStores(storedSessionId: string): SessionInfo | undefined {
+  return (
+    $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ??
+    $messagingSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ??
+    $cronSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+  )
+}
+
+function removeSessionFromSidebarStores(storedSessionId: string, session?: SessionInfo, adjustTotals = true) {
+  const matches = (candidate: SessionInfo) =>
+    sessionMatchesStoredId(candidate, storedSessionId) ||
+    (session?._lineage_root_id != null && sessionMatchesStoredId(candidate, session._lineage_root_id))
+
+  setSessions(prev => prev.filter(candidate => !matches(candidate)))
+  setMessagingSessions(prev => prev.filter(candidate => !matches(candidate)))
+  setCronSessions(prev => prev.filter(candidate => !matches(candidate)))
+
+  const platform = normalizeSessionSource(session?.source)
+  if (adjustTotals && platform && isMessagingSource(platform)) {
+    setMessagingPlatformTotals(prev => {
+      const current = prev[platform]
+      if (typeof current !== 'number') {
+        return prev
+      }
+
+      return { ...prev, [platform]: Math.max(0, current - 1) }
+    })
+  }
+}
+
+function restoreSessionToSidebarStore(session: SessionInfo) {
+  const withoutExisting = (candidate: SessionInfo) => !sessionMatchesStoredId(candidate, session.id)
+
+  if (session.source === 'cron') {
+    setCronSessions(prev => [session, ...prev.filter(withoutExisting)])
+  } else if (isMessagingSource(session.source)) {
+    setMessagingSessions(prev => [session, ...prev.filter(withoutExisting)])
+    const platform = normalizeSessionSource(session.source)
+    if (platform) {
+      setMessagingPlatformTotals(prev => {
+        const current = prev[platform]
+        if (typeof current !== 'number') {
+          return prev
+        }
+
+        return { ...prev, [platform]: current + 1 }
+      })
+    }
+  } else {
+    setSessions(prev => [session, ...prev.filter(withoutExisting)])
+    setSessionsTotal(prev => prev + 1)
+  }
 }
 
 function upsertResolvedSession(session: SessionInfo, storedSessionId: string) {
@@ -985,19 +1045,25 @@ export function useSessionActions({
     async (storedSessionId: string) => {
       clearNotifications()
 
-      const archived = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+      const archived = findSessionInSidebarStores(storedSessionId)
+      const wasInMainSessions = $sessions.get().some(session => sessionMatchesStoredId(session, storedSessionId))
       const wasSelected = selectedStoredSessionId === storedSessionId
       const previousPinned = $pinnedSessionIds.get()
       // Pins are keyed on the durable lineage-root id; the stored id may be the
       // live tip after compression. Drop both so the pin can't linger.
       const archivedPinId = archived ? sessionPinId(archived) : storedSessionId
 
-      // Soft-hide: drop from the sidebar immediately, keep the data.
-      setSessions(prev => prev.filter(session => !sessionMatchesStoredId(session, storedSessionId)))
+      // Soft-hide: drop from every sidebar slice immediately, keep the data.
+      // The main sessions section, cron runs, and messaging buckets are separate
+      // stores; removing only $sessions made Telegram/Discord bucket Archive look
+      // like a no-op even though the backend mutation succeeded.
+      removeSessionFromSidebarStores(storedSessionId, archived)
       // Archived sessions are hidden by the listSessions(min_messages=1) query
       // on the next refresh, so they count as "removed" for the load-more
       // footer math.
-      setSessionsTotal(prev => Math.max(0, prev - 1))
+      if (wasInMainSessions) {
+        setSessionsTotal(prev => Math.max(0, prev - 1))
+      }
       $pinnedSessionIds.set(previousPinned.filter(id => id !== storedSessionId && id !== archivedPinId))
 
       if (wasSelected) {
@@ -1010,13 +1076,12 @@ export function useSessionActions({
         // in flight and briefly reinsert the still-unarchived backend row. Win
         // that race after the mutation succeeds so right-click → Archive does
         // not appear to do nothing until the next full refresh.
-        setSessions(prev => prev.filter(session => !sessionMatchesStoredId(session, storedSessionId)))
+        removeSessionFromSidebarStores(storedSessionId, archived, false)
         $pinnedSessionIds.set($pinnedSessionIds.get().filter(id => id !== storedSessionId && id !== archivedPinId))
         notify({ durationMs: 2_000, kind: 'success', message: copy.archived })
       } catch (err) {
         if (archived) {
-          setSessions(prev => [archived, ...prev.filter(session => !sessionMatchesStoredId(session, storedSessionId))])
-          setSessionsTotal(prev => prev + 1)
+          restoreSessionToSidebarStore(archived)
         }
 
         $pinnedSessionIds.set(previousPinned)
