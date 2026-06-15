@@ -3,9 +3,22 @@ import type { MutableRefObject } from 'react'
 import { useEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { getSessionMessages } from '@/hermes'
+import { getSessionMessages, setSessionArchived } from '@/hermes'
+import { $pinnedSessionIds } from '@/store/layout'
 import { $activeGatewayProfile, $newChatProfile } from '@/store/profile'
-import { $currentCwd, $messages, $resumeFailedSessionId, setMessages, setResumeFailedSessionId } from '@/store/session'
+import {
+  $cronSessions,
+  $currentCwd,
+  $messages,
+  $messagingPlatformTotals,
+  $messagingSessions,
+  $resumeFailedSessionId,
+  $sessions,
+  $sessionsTotal,
+  setMessages,
+  setResumeFailedSessionId
+} from '@/store/session'
+import type { SessionInfo } from '@/types/hermes'
 
 import type { ClientSessionState } from '../../types'
 
@@ -21,6 +34,65 @@ vi.mock('@/hermes', async importOriginal => ({
 }))
 
 const RUNTIME_SESSION_ID = 'rt-new-001'
+
+type SessionActionsHandle = ReturnType<typeof useSessionActions>
+
+function baseSession(overrides: Partial<SessionInfo>): SessionInfo {
+  return {
+    cwd: null,
+    ended_at: null,
+    id: 'session-1',
+    input_tokens: 0,
+    is_active: false,
+    is_default_profile: true,
+    last_active: 1,
+    message_count: 1,
+    model: null,
+    output_tokens: 0,
+    preview: '',
+    profile: 'default',
+    source: 'tui',
+    started_at: 1,
+    title: null,
+    tool_call_count: 0,
+    ...overrides
+  }
+}
+
+function ActionsHarness({
+  onReady,
+  requestGateway = vi.fn(async () => ({} as never)),
+  selectedStoredSessionId = null
+}: {
+  onReady: (actions: SessionActionsHandle) => void
+  requestGateway?: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+  selectedStoredSessionId?: null | string
+}) {
+  const ref = <T,>(value: T): MutableRefObject<T> => ({ current: value })
+
+  const actions = useSessionActions({
+    activeSessionId: null,
+    activeSessionIdRef: ref<string | null>(null),
+    busyRef: ref(false),
+    creatingSessionRef: ref(false),
+    ensureSessionState: () => ({}) as ClientSessionState,
+    getRouteToken: () => 'token',
+    navigate: vi.fn() as never,
+    requestGateway,
+    runtimeIdByStoredSessionIdRef: ref(new Map<string, string>()),
+    selectedStoredSessionId,
+    selectedStoredSessionIdRef: ref<string | null>(selectedStoredSessionId),
+    sessionStateByRuntimeIdRef: ref(new Map<string, ClientSessionState>()),
+    syncSessionStateToView: vi.fn(),
+    updateSessionState: () => ({}) as ClientSessionState
+  })
+
+  useEffect(() => {
+    onReady(actions)
+  }, [actions, onReady])
+
+  return null
+}
 
 function Harness({
   onReady,
@@ -84,6 +156,12 @@ describe('createBackendSessionForSend profile routing', () => {
     cleanup()
     $newChatProfile.set(null)
     $activeGatewayProfile.set('default')
+    $sessions.set([])
+    $sessionsTotal.set(0)
+    $messagingSessions.set([])
+    $messagingPlatformTotals.set({})
+    $cronSessions.set([])
+    $pinnedSessionIds.set([])
     vi.restoreAllMocks()
   })
 
@@ -175,7 +253,6 @@ describe('resumeSession failure recovery', () => {
   }
 
   it('arms $resumeFailedSessionId when resume RPC and REST fallback both fail', async () => {
-    // session.resume rejects (e.g. timeout against a wedged backend)...
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'session.resume') {
         throw new Error('request timed out: session.resume')
@@ -184,19 +261,14 @@ describe('resumeSession failure recovery', () => {
       return {} as never
     })
 
-    // ...and the REST transcript fallback also rejects (backend unreachable).
     vi.mocked(getSessionMessages).mockRejectedValue(new Error('network down'))
 
     await runResume(requestGateway)
 
-    // The window is no longer silently stranded: the failure latch is armed for
-    // the stored session, which use-route-resume consumes to retry.
     expect($resumeFailedSessionId.get()).toBe('stored-1')
   })
 
   it('does NOT arm the failure latch when the resume RPC fails but the REST fallback paints history', async () => {
-    // session.resume rejects, but the REST transcript fallback succeeds and
-    // hydrates a readable transcript — the window is NOT stranded.
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'session.resume') {
         throw new Error('request timed out: session.resume')
@@ -215,11 +287,7 @@ describe('resumeSession failure recovery', () => {
 
     await runResume(requestGateway)
 
-    // Arming here would auto-retry a window that already shows history and,
-    // on exhaustion, blank that transcript behind the error overlay — a
-    // regression vs. plain fallback-success. The latch must stay clear.
     expect($resumeFailedSessionId.get()).toBeNull()
-    // The fallback transcript is visible.
     expect($messages.get().length).toBeGreaterThan(0)
   })
 
@@ -234,12 +302,10 @@ describe('resumeSession failure recovery', () => {
 
     vi.mocked(getSessionMessages).mockRejectedValue(new Error('network down'))
 
-    // resumeSession must resolve (swallow the fallback failure), not reject.
     await expect(runResume(requestGateway)).resolves.toBeUndefined()
   })
 
   it('leaves the failure latch clear when resume succeeds', async () => {
-    // Pre-arm to prove a successful resume clears it (entry-clear path).
     setResumeFailedSessionId('stored-1')
 
     const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
@@ -255,5 +321,54 @@ describe('resumeSession failure recovery', () => {
     await runResume(requestGateway)
 
     expect($resumeFailedSessionId.get()).toBeNull()
+  })
+})
+
+describe('archiveSession sidebar stores', () => {
+  afterEach(() => {
+    cleanup()
+    $sessions.set([])
+    $sessionsTotal.set(0)
+    $messagingSessions.set([])
+    $messagingPlatformTotals.set({})
+    $cronSessions.set([])
+    $pinnedSessionIds.set([])
+    vi.restoreAllMocks()
+  })
+
+  it('removes a Telegram bucket row from the messaging store and sends its profile', async () => {
+    const telegram = baseSession({ id: 'tg-1', profile: 'slorg', source: 'telegram', title: 'Telegram chat' })
+    $sessions.set([])
+    $sessionsTotal.set(7)
+    $messagingSessions.set([telegram])
+    $messagingPlatformTotals.set({ telegram: 3 })
+    vi.mocked(setSessionArchived).mockResolvedValue({ archived: true, ok: true, title: '' } as never)
+
+    let actions: SessionActionsHandle | null = null
+    render(<ActionsHarness onReady={next => (actions = next)} />)
+    await waitFor(() => expect(actions).not.toBeNull())
+
+    await actions!.archiveSession('tg-1')
+
+    expect(setSessionArchived).toHaveBeenCalledWith('tg-1', true, 'slorg')
+    expect($messagingSessions.get()).toEqual([])
+    expect($messagingPlatformTotals.get()).toEqual({ telegram: 2 })
+    expect($sessionsTotal.get()).toBe(7)
+  })
+
+  it('restores a messaging bucket row if the archive request fails', async () => {
+    const discord = baseSession({ id: 'disc-1', source: 'discord', title: 'Discord chat' })
+    $messagingSessions.set([discord])
+    $messagingPlatformTotals.set({ discord: 4 })
+    vi.mocked(setSessionArchived).mockRejectedValue(new Error('boom'))
+
+    let actions: SessionActionsHandle | null = null
+    render(<ActionsHarness onReady={next => (actions = next)} />)
+    await waitFor(() => expect(actions).not.toBeNull())
+
+    await actions!.archiveSession('disc-1')
+
+    expect($messagingSessions.get()).toEqual([discord])
+    expect($messagingPlatformTotals.get()).toEqual({ discord: 4 })
   })
 })
