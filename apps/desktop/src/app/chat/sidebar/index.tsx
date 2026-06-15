@@ -49,7 +49,6 @@ import {
   $pinnedSessionIds,
   $sidebarAgentsGrouped,
   $sidebarCronOpen,
-  $sidebarCronSessionsOpen,
   $sidebarMessagingOpenIds,
   $sidebarOpen,
   $sidebarOverlayMounted,
@@ -64,7 +63,6 @@ import {
   setPinnedSessionOrder,
   setSidebarAgentsGrouped,
   setSidebarCronOpen,
-  setSidebarCronSessionsOpen,
   setSidebarPinsOpen,
   setSidebarRecentsOpen,
   setSidebarSessionOrderIds,
@@ -84,7 +82,6 @@ import {
   normalizeProfileKey
 } from '@/store/profile'
 import {
-  $cronSessions,
   $messagingPlatformTotals,
   $messagingSessions,
   $messagingTruncated,
@@ -339,10 +336,8 @@ export function ChatSidebar({
   const pinsOpen = useStore($sidebarPinsOpen)
   const agentsOpen = useStore($sidebarRecentsOpen)
   const cronOpen = useStore($sidebarCronOpen)
-  const cronSessionsOpen = useStore($sidebarCronSessionsOpen)
   const selectedSessionId = useStore($selectedStoredSessionId)
   const sessions = useStore($sessions)
-  const cronSessions = useStore($cronSessions)
   const cronJobs = useStore($cronJobs)
   const messagingSessions = useStore($messagingSessions)
   const messagingPlatformTotals = useStore($messagingPlatformTotals)
@@ -419,10 +414,6 @@ export function ChatSidebar({
     [sessions, showAllProfiles, profileScope]
   )
 
-  const visibleCronSessions = useMemo(
-    () => (showAllProfiles ? cronSessions : cronSessions.filter(s => normalizeProfileKey(s.profile) === profileScope)),
-    [cronSessions, showAllProfiles, profileScope]
-  )
 
   // Agent session order is pinned to creation time (started_at), NOT activity —
   // a new message must never float a session to the top. Position only changes
@@ -432,11 +423,6 @@ export function ChatSidebar({
     [visibleSessions]
   )
 
-  const sortedCronSessions = useMemo(
-    () => [...visibleCronSessions].sort((a, b) => sessionTime(b) - sessionTime(a)),
-    [visibleCronSessions]
-  )
-
   const workingSessionIdSet = useMemo(() => new Set(workingSessionIds), [workingSessionIds])
 
   // Index sessions by both their live id and their lineage-root id so a pin
@@ -444,10 +430,7 @@ export function ChatSidebar({
   const sessionByAnyId = useMemo(() => {
     const map = new Map<string, SessionInfo>()
 
-    // Cron sessions are listed separately but can still be pinned, so index
-    // them too — otherwise a pinned cron run can't resolve into the Pinned
-    // section. Recents take precedence on id collisions (set last).
-    for (const s of [...visibleCronSessions, ...visibleSessions]) {
+    for (const s of visibleSessions) {
       map.set(s.id, s)
 
       if (s._lineage_root_id && !map.has(s._lineage_root_id)) {
@@ -456,7 +439,7 @@ export function ChatSidebar({
     }
 
     return map
-  }, [visibleSessions, visibleCronSessions])
+  }, [visibleSessions])
 
   const pinnedSessions = useMemo(() => {
     const seen = new Set<string>()
@@ -534,11 +517,6 @@ export function ChatSidebar({
     [sortedSessions, pinnedRealIdSet]
   )
 
-  const unpinnedCronSessions = useMemo(
-    () => sortedCronSessions.filter(s => !pinnedRealIdSet.has(s.id)),
-    [sortedCronSessions, pinnedRealIdSet]
-  )
-
   useEffect(() => {
     const next = resolveManualSessionOrderIds(
       unpinnedAgentSessions.map(s => s.id),
@@ -552,6 +530,7 @@ export function ChatSidebar({
 
     if (!next.length && agentOrderIds.length) {
       setSidebarSessionOrderIds([])
+
       return
     }
 
@@ -565,9 +544,11 @@ export function ChatSidebar({
     [unpinnedAgentSessions, agentOrderIds, agentOrderManual]
   )
 
-  // Recents are local-only: messaging-platform sessions are fetched as their
-  // own slice ($messagingSessions) and rendered in self-managed per-platform
-  // sections below, so there is no source-grouping magic to untangle here.
+  // Recents are the inbox: local/desktop sessions and cron run sessions live
+  // together here until archived. Messaging-platform sessions are fetched as
+  // their own slice ($messagingSessions) and rendered in self-managed
+  // per-platform sections below, so there is no source-grouping magic to
+  // untangle here.
   //
   // Workspace grouping is a `parent (repo) → worktree → sessions` tree. Git
   // metadata (probed locally) is authoritative; unresolved cwds fall back to a
@@ -781,7 +762,7 @@ export function ChatSidebar({
 
   const showSessionSkeletons = sessionsLoading && sortedSessions.length === 0
 
-  const showSessionSections = showSessionSkeletons || sortedSessions.length > 0 || sortedCronSessions.length > 0
+  const showSessionSections = showSessionSkeletons || sortedSessions.length > 0
 
   // Each reorderable list reports its OWN new id order; persisting is a direct,
   // typed write — no id-prefix sniffing to figure out which level moved.
@@ -1031,26 +1012,6 @@ export function ChatSidebar({
                 sessions={displayAgentSessions}
                 sortable={!showAllProfiles && agentSessions.length > 1}
                 tree={agentTree}
-                workingSessionIdSet={workingSessionIdSet}
-              />
-            )}
-
-            {!trimmedQuery && unpinnedCronSessions.length > 0 && (
-              <SidebarSessionsSection
-                activeSessionId={activeSidebarSessionId}
-                contentClassName={cn('flex max-h-44 flex-col gap-px rounded-lg pb-2 pt-1', GROUP_BODY)}
-                emptyState={null}
-                label={s.cronSessions}
-                labelMeta={String(unpinnedCronSessions.length)}
-                onArchiveSession={onArchiveSession}
-                onDeleteSession={onDeleteSession}
-                onResumeSession={onResumeSession}
-                onToggle={() => setSidebarCronSessionsOpen(!cronSessionsOpen)}
-                onTogglePin={pinSession}
-                open={cronSessionsOpen}
-                pinned={false}
-                rootClassName="shrink-0 p-0 pb-1"
-                sessions={unpinnedCronSessions}
                 workingSessionIdSet={workingSessionIdSet}
               />
             )}
