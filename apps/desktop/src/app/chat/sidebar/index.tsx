@@ -93,6 +93,7 @@ import {
   $sessions,
   $sessionsLoading,
   $sessionsTotal,
+  $unreadSessionIds,
   $workingSessionIds,
   sessionPinId
 } from '@/store/session'
@@ -1264,6 +1265,8 @@ function SidebarSessionsSection({
 }: SidebarSessionsSectionProps) {
   const hasTreeSessions = Boolean(tree?.some(parent => parent.sessionCount > 0))
   const hasGroupedSessions = Boolean(groups?.some(group => group.sessions.length > 0))
+  const unreadSessionIds = useStore($unreadSessionIds)
+  const unreadSessionIdSet = useMemo(() => new Set(unreadSessionIds), [unreadSessionIds])
   const showEmptyState = forceEmptyState || (!hasGroupedSessions && !hasTreeSessions && sessions.length === 0)
   // The flat recents/pinned list is the only place sessions reorder by hand;
   // grouped/tree views always sort by creation date and never drag.
@@ -1273,6 +1276,10 @@ function SidebarSessionsSection({
     const rowProps = {
       isPinned: pinned,
       isSelected: session.id === activeSessionId,
+      isUnread:
+        session.id !== activeSessionId &&
+        (unreadSessionIdSet.has(session.id) ||
+          (session._lineage_root_id != null && unreadSessionIdSet.has(session._lineage_root_id))),
       isWorking: workingSessionIdSet.has(session.id),
       onArchive: () => onArchiveSession(session.id),
       onDelete: () => onDeleteSession(session.id),
@@ -1343,6 +1350,7 @@ function SidebarSessionsSection({
         pinned={pinned}
         sessions={sessions}
         sortable={sessionsDraggable}
+        unreadSessionIdSet={unreadSessionIdSet}
         workingSessionIdSet={workingSessionIdSet}
       />
     )
@@ -1800,6 +1808,7 @@ interface SortableSessionRowProps {
   session: SessionInfo
   isPinned: boolean
   isSelected: boolean
+  isUnread: boolean
   isWorking: boolean
   onArchive: () => void
   onDelete: () => void

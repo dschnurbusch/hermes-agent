@@ -4,12 +4,13 @@ import { lastVisibleMessageIsUser } from '@/app/chat/thread-loading'
 import type { ContextSuggestion } from '@/app/types'
 import type { HermesConnection } from '@/global'
 import type { ChatMessage } from '@/lib/chat-messages'
-import { persistString, storedString } from '@/lib/storage'
+import { persistString, persistStringArray, storedString, storedStringArray } from '@/lib/storage'
 import type { SessionInfo, UsageStats } from '@/types/hermes'
 
 type Updater<T> = T | ((current: T) => T)
 
 const WORKSPACE_CWD_KEY = 'hermes.desktop.workspace-cwd'
+const UNREAD_SESSION_IDS_KEY = 'hermes.desktop.unread-session-ids'
 
 let configuredDefaultProjectDir = ''
 
@@ -193,6 +194,7 @@ export const $messagingTruncated = atom<boolean>(false)
 export const $sessionProfileTotals = atom<Record<string, number>>({})
 export const $sessionsLoading = atom(true)
 export const $workingSessionIds = atom<string[]>([])
+export const $unreadSessionIds = atom<string[]>(storedStringArray(UNREAD_SESSION_IDS_KEY))
 export const $activeSessionId = atom<string | null>(null)
 export const $selectedStoredSessionId = atom<string | null>(null)
 export const $messages = atom<ChatMessage[]>([])
@@ -248,6 +250,15 @@ export const setSessionProfileTotals = (next: Updater<Record<string, number>>) =
   updateAtom($sessionProfileTotals, next)
 export const setSessionsLoading = (next: Updater<boolean>) => updateAtom($sessionsLoading, next)
 export const setWorkingSessionIds = (next: Updater<string[]>) => updateAtom($workingSessionIds, next)
+export const setUnreadSessionIds = (next: Updater<string[]>) => {
+  updateAtom($unreadSessionIds, current => {
+    const value = typeof next === 'function' ? (next as (current: string[]) => string[])(current) : next
+    const deduped = Array.from(new Set(value.filter(id => id.trim().length > 0)))
+
+    return deduped.length === current.length && deduped.every((id, index) => id === current[index]) ? current : deduped
+  })
+  persistStringArray(UNREAD_SESSION_IDS_KEY, $unreadSessionIds.get())
+}
 export const setActiveSessionId = (next: Updater<string | null>) => updateAtom($activeSessionId, next)
 export const setSelectedStoredSessionId = (next: Updater<string | null>) => updateAtom($selectedStoredSessionId, next)
 export const setMessages = (next: Updater<ChatMessage[]>) => updateAtom($messages, next)
@@ -398,6 +409,12 @@ export const setAttentionSessionIds = (next: Updater<string[]>) => updateAtom($a
 export function setSessionAttention(sessionId: string | null | undefined, needsInput: boolean) {
   if (sessionId) {
     toggleMembership(setAttentionSessionIds, sessionId, needsInput)
+  }
+}
+
+export function setSessionUnread(sessionId: string | null | undefined, unread: boolean) {
+  if (sessionId) {
+    toggleMembership(setUnreadSessionIds, sessionId, unread)
   }
 }
 

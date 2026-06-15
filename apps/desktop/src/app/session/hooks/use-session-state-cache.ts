@@ -16,6 +16,7 @@ import {
   setCurrentReasoningEffort,
   setCurrentServiceTier,
   setSessionAttention,
+  setSessionUnread,
   setSessionWorking,
   setTurnStartedAt,
   setYoloActive
@@ -62,6 +63,12 @@ function syncRuntimeMetadataToView(state: ClientSessionState) {
   setCurrentFastMode(state.fast ?? false)
   setYoloActive(state.yolo ?? false)
   setCurrentPersonality(state.personality ?? '')
+}
+
+function lastVisibleMessageIsAssistant(messages: ChatMessage[]): boolean {
+  const message = messages.findLast(item => !item.hidden && (item.role === 'assistant' || item.role === 'user'))
+
+  return message?.role === 'assistant'
 }
 
 export function useSessionStateCache({
@@ -254,6 +261,17 @@ export function useSessionStateCache({
       // the stream goes silent.
       if (next.busy) {
         noteSessionActivity(next.storedSessionId)
+      }
+
+      if (
+        previous.busy &&
+        !next.busy &&
+        !next.needsInput &&
+        next.storedSessionId &&
+        next.storedSessionId !== selectedStoredSessionIdRef.current &&
+        lastVisibleMessageIsAssistant(next.messages)
+      ) {
+        setSessionUnread(next.storedSessionId, true)
       }
 
       syncSessionStateToView(sessionId, next)

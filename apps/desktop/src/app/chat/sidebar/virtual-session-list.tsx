@@ -12,6 +12,7 @@ import { SidebarSessionRow } from './session-row'
 interface SessionRowCommonProps {
   isPinned: boolean
   isSelected: boolean
+  isUnread: boolean
   isWorking: boolean
   onArchive: () => void
   onDelete: () => void
@@ -29,6 +30,7 @@ interface VirtualSessionListProps {
   pinned: boolean
   sessions: SessionInfo[]
   sortable: boolean
+  unreadSessionIdSet: Set<string>
   workingSessionIdSet: Set<string>
 }
 
@@ -45,6 +47,7 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
   pinned,
   sessions,
   sortable,
+  unreadSessionIdSet,
   workingSessionIdSet
 }) => {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
@@ -74,6 +77,10 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
     const commonProps: SessionRowCommonProps = {
       isPinned: pinned,
       isSelected: session.id === activeSessionId,
+      isUnread:
+        session.id !== activeSessionId &&
+        (unreadSessionIdSet.has(session.id) ||
+          (session._lineage_root_id != null && unreadSessionIdSet.has(session._lineage_root_id))),
       isWorking: workingSessionIdSet.has(session.id),
       onArchive: () => onArchiveSession(session.id),
       onDelete: () => onDeleteSession(session.id),

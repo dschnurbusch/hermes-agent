@@ -9,12 +9,14 @@ import {
   $currentReasoningEffort,
   $currentServiceTier,
   $turnStartedAt,
+  $unreadSessionIds,
   setCurrentFastMode,
   setCurrentModel,
   setCurrentProvider,
   setCurrentReasoningEffort,
   setCurrentServiceTier,
-  setTurnStartedAt
+  setTurnStartedAt,
+  setUnreadSessionIds
 } from '@/store/session'
 
 import { useSessionStateCache } from './use-session-state-cache'
@@ -64,6 +66,7 @@ describe('useSessionStateCache — per-session turn timer', () => {
     setCurrentReasoningEffort('')
     setCurrentServiceTier('')
     setCurrentFastMode(false)
+    setUnreadSessionIds([])
   })
 
   afterEach(() => {
@@ -75,6 +78,7 @@ describe('useSessionStateCache — per-session turn timer', () => {
     setCurrentReasoningEffort('')
     setCurrentServiceTier('')
     setCurrentFastMode(false)
+    setUnreadSessionIds([])
   })
 
   it("keeps a background session's running turn clock and never mirrors it to the view", () => {
@@ -211,5 +215,62 @@ describe('useSessionStateCache — per-session turn timer', () => {
     expect($currentReasoningEffort.get()).toBe('')
     expect($currentServiceTier.get()).toBe('')
     expect($currentFastMode.get()).toBe(false)
+  })
+
+  it('marks a background session unread when its assistant response finishes', () => {
+    let cache!: Cache
+    render(<Harness activeSessionId="fg-runtime" onReady={c => (cache = c)} selectedStoredSessionId="fg-stored" />)
+
+    act(() => {
+      cache.updateSessionState(
+        'bg-runtime',
+        state => ({
+          ...state,
+          busy: true,
+          messages: [
+            { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'go' }] },
+            { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'working' }], pending: true }
+          ]
+        }),
+        'bg-stored'
+      )
+    })
+
+    expect($unreadSessionIds.get()).toEqual([])
+
+    act(() => {
+      cache.updateSessionState('bg-runtime', state => ({
+        ...state,
+        busy: false,
+        messages: state.messages.map(message =>
+          message.id === 'a1' ? { ...message, parts: [{ type: 'text', text: 'done' }], pending: false } : message
+        )
+      }))
+    })
+
+    expect($unreadSessionIds.get()).toEqual(['bg-stored'])
+  })
+
+  it('does not mark the focused session unread when its response finishes', () => {
+    let cache!: Cache
+    render(<Harness activeSessionId="fg-runtime" onReady={c => (cache = c)} selectedStoredSessionId="fg-stored" />)
+
+    act(() => {
+      cache.updateSessionState(
+        'fg-runtime',
+        state => ({
+          ...state,
+          busy: true,
+          messages: [{ id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'working' }] }]
+        }),
+        'fg-stored'
+      )
+    })
+
+    act(() => {
+      cache.updateSessionState('fg-runtime', state => ({ ...state, busy: false }))
+    })
+
+    expect($unreadSessionIds.get()).toEqual([])
   })
 })
