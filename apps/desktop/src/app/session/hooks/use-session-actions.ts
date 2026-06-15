@@ -49,6 +49,7 @@ import {
   setSelectedStoredSessionId,
   setSessions,
   setSessionStartedAt,
+  setSessionUnread,
   setSessionsTotal,
   setTurnStartedAt,
   setYoloActive,
@@ -639,6 +640,7 @@ export function useSessionActions({
       // resume entry").
       setFreshDraftReady(false)
       clearNotifications()
+      setSessionUnread(storedSessionId, false)
       setSelectedStoredSessionId(storedSessionId)
       selectedStoredSessionIdRef.current = storedSessionId
       // Optimistically clear any prior resume-failure latch for this session:

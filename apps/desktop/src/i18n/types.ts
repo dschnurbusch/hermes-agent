@@ -913,6 +913,7 @@ export interface Translations {
       sessionActions: string
       sessionRunning: string
       needsInput: string
+      unreadResponse: string
       waitingForAnswer: string
       handoffOrigin: (platform: string) => string
       renamed: string

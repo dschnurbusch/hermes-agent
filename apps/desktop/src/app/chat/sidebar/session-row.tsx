@@ -21,6 +21,7 @@ interface SidebarSessionRowProps extends React.ComponentProps<'div'> {
   session: SessionInfo
   isPinned: boolean
   isSelected: boolean
+  isUnread: boolean
   isWorking: boolean
   onArchive: () => void
   onDelete: () => void
@@ -53,6 +54,7 @@ export function SidebarSessionRow({
   session,
   isPinned,
   isSelected,
+  isUnread,
   isWorking,
   onArchive,
   onDelete,
@@ -96,6 +98,7 @@ export function SidebarSessionRow({
           'group relative grid min-h-[1.625rem] cursor-pointer grid-cols-[minmax(0,1fr)_1.375rem] items-center rounded-md transition-colors duration-100 ease-out hover:bg-(--ui-row-hover-background) hover:transition-none',
           isSelected && 'bg-(--ui-row-active-background)',
           isWorking && 'text-foreground',
+          isUnread && !isSelected && 'bg-(--ui-control-hover-background)/40',
           // Opaque surface while lifted so the dragged row erases what's under
           // it (translucency let the rows below bleed through).
           dragging && 'z-10 cursor-grabbing bg-(--ui-sidebar-surface-background)',
@@ -173,6 +176,7 @@ export function SidebarSessionRow({
               <SidebarRowDot
                 className="transition-opacity group-hover/handle:opacity-0 group-focus-within/handle:opacity-0"
                 isWorking={isWorking}
+                isUnread={isUnread}
                 needsInput={needsInput}
               />
               <Codicon
@@ -191,7 +195,7 @@ export function SidebarSessionRow({
                 needsInput ? 'overflow-visible' : 'overflow-hidden'
               )}
             >
-              <SidebarRowDot isWorking={isWorking} needsInput={needsInput} />
+              <SidebarRowDot isUnread={isUnread} isWorking={isWorking} needsInput={needsInput} />
             </span>
           )}
           {handoffSource && handoffLabel ? (
@@ -203,7 +207,7 @@ export function SidebarSessionRow({
               />
             </Tip>
           ) : null}
-          <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-normal text-(--ui-text-secondary) group-hover:text-foreground group-data-[working=true]:text-foreground/90">
+          <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-normal text-(--ui-text-secondary) group-hover:text-foreground group-data-[working=true]:text-foreground/90 data-[unread=true]:font-medium data-[unread=true]:text-foreground/90" data-unread={isUnread && !isSelected ? 'true' : undefined}>
             {title}
           </span>
         </button>
@@ -240,10 +244,12 @@ export function SidebarSessionRow({
 
 function SidebarRowDot({
   isWorking,
+  isUnread = false,
   needsInput = false,
   className
 }: {
   isWorking: boolean
+  isUnread?: boolean
   needsInput?: boolean
   className?: string
 }) {
@@ -261,6 +267,20 @@ function SidebarRowDot({
         className={cn('quest-glow relative size-1.5 rounded-full bg-amber-500', className)}
         role="status"
         title={r.waitingForAnswer}
+      />
+    )
+  }
+
+  if (isUnread && !isWorking) {
+    return (
+      <span
+        aria-label={r.unreadResponse}
+        className={cn(
+          'relative size-1.5 rounded-full bg-sky-400 shadow-[0_0_0.5rem_color-mix(in_srgb,rgb(56_189_248)_65%,transparent)] ring-2 ring-sky-400/20',
+          className
+        )}
+        role="status"
+        title={r.unreadResponse}
       />
     )
   }
