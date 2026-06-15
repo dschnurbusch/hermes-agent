@@ -16,7 +16,7 @@ import { matchesQuery, useMediaQuery } from '@/hooks/use-media-query'
 import { persistString, persistStringRecord, storedString, storedStringRecord } from '@/lib/storage'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 
-import { hexToRgb, mix, readableOn } from './color'
+import { contrastRatio, hexToRgb, mix, readableOn } from './color'
 import { BUILTIN_THEME_LIST, BUILTIN_THEMES, DEFAULT_SKIN_NAME, DEFAULT_TYPOGRAPHY, nousTheme } from './presets'
 import type { DesktopTheme, DesktopThemeColors } from './types'
 import { $userThemes, resolveTheme } from './user-themes'
@@ -152,6 +152,56 @@ function renderedModeFor(colors: DesktopThemeColors, mode: 'light' | 'dark'): 'l
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 'light' : 'dark'
 }
 
+const UNREAD_CONTRAST_CANDIDATES = [
+  '#38bdf8', // sky: Dan's preferred accent when it clears the current skin
+  '#0ea5e9',
+  '#0369a1',
+  '#22d3ee',
+  '#0891b2',
+  '#a78bfa',
+  '#7c3aed',
+  '#f472b6',
+  '#be123c',
+  '#84cc16',
+  '#4d7c0f',
+  '#facc15',
+  '#a16207',
+  '#fb923c',
+  '#c2410c'
+]
+
+function distinctness(a: string, b: string): number {
+  const ar = hexToRgb(a)
+  const br = hexToRgb(b)
+
+  if (!ar || !br) {
+    return 0
+  }
+
+  return Math.sqrt((ar[0] - br[0]) ** 2 + (ar[1] - br[1]) ** 2 + (ar[2] - br[2]) ** 2)
+}
+
+export function unreadContrastColor(colors: DesktopThemeColors): string {
+  const bg = colors.sidebarBackground ?? colors.background
+  const active = colors.midground ?? colors.ring ?? colors.primary
+  const warm = colors.primary
+
+  const candidate = UNREAD_CONTRAST_CANDIDATES.find(color => {
+    const contrast = contrastRatio(color, bg)
+    const distinct = Math.min(distinctness(color, active), distinctness(color, warm))
+
+    return contrast >= 3 && distinct >= 80
+  })
+
+  if (candidate) {
+    return candidate
+  }
+
+  const fallback = contrastRatio('#000000', bg) >= contrastRatio('#ffffff', bg) ? '#000000' : '#ffffff'
+
+  return fallback
+}
+
 // ─── CSS application ────────────────────────────────────────────────────────
 
 // Per-mode mix knobs. Light/dark fallbacks live in styles.css `:root` /
@@ -191,6 +241,7 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
     '--theme-accent-soft': c.accent,
     '--theme-midground': midground,
     '--theme-warm': c.primary,
+    '--theme-unread-contrast': unreadContrastColor(c),
     '--theme-background-seed': c.background,
     '--theme-sidebar-seed': c.sidebarBackground ?? c.background,
     '--theme-card-seed': c.card,
