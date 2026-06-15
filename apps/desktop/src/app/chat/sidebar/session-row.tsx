@@ -275,7 +275,7 @@ function SidebarRowDot({
       <span
         aria-label={r.unreadResponse}
         className={cn(
-          'relative size-1.5 rounded-full bg-(--ui-accent-secondary) shadow-[0_0_0.5rem_color-mix(in_srgb,var(--ui-accent-secondary)_60%,transparent)] ring-2 ring-[color-mix(in_srgb,var(--ui-accent-secondary)_20%,transparent)]',
+          'relative size-1.5 rounded-full bg-(--ui-unread-contrast) shadow-[0_0_0.5rem_color-mix(in_srgb,var(--ui-unread-contrast)_60%,transparent)] ring-2 ring-[color-mix(in_srgb,var(--ui-unread-contrast)_20%,transparent)]',
           className
         )}
         role="status"
