@@ -258,13 +258,12 @@ function SidebarRowDot({
 
   // "Needs input" wins over "working": a clarify-blocked session is technically
   // still running, but the actionable state is that it's waiting on the user.
-  // Amber + steady (no ping) reads as "your turn", distinct from the accent
-  // pulse of an active turn.
+  // Use the theme's warm token so this stays consistent across custom skins.
   if (needsInput) {
     return (
       <span
         aria-label={r.needsInput}
-        className={cn('quest-glow relative size-1.5 rounded-full bg-amber-500', className)}
+        className={cn('quest-glow relative size-1.5 rounded-full bg-(--ui-warm)', className)}
         role="status"
         title={r.waitingForAnswer}
       />
@@ -276,7 +275,7 @@ function SidebarRowDot({
       <span
         aria-label={r.unreadResponse}
         className={cn(
-          'relative size-1.5 rounded-full bg-sky-400 shadow-[0_0_0.5rem_color-mix(in_srgb,rgb(56_189_248)_65%,transparent)] ring-2 ring-sky-400/20',
+          'relative size-1.5 rounded-full bg-(--ui-accent-secondary) shadow-[0_0_0.5rem_color-mix(in_srgb,var(--ui-accent-secondary)_60%,transparent)] ring-2 ring-[color-mix(in_srgb,var(--ui-accent-secondary)_20%,transparent)]',
           className
         )}
         role="status"
