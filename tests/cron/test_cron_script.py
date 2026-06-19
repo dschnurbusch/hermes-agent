@@ -173,6 +173,47 @@ class TestRunJobScript:
         assert parsed["new_prs"][0]["number"] == 42
 
 
+class TestCronSessionTitle:
+    """Test explicit per-run desktop session title hints in cron output."""
+
+    def test_extract_session_title_hint(self):
+        from cron.scheduler import _extract_cron_session_title
+
+        response = """# Audit Complete
+
+Session title: Grisham Estate - App Prep Audit
+
+Needs follow-up on publication affidavit.
+"""
+        assert _extract_cron_session_title(response) == "Grisham Estate - App Prep Audit"
+
+    def test_extract_session_title_accepts_markdown_bullet(self):
+        from cron.scheduler import _extract_cron_session_title
+
+        response = "- **Desktop session title:** `Grisham Estate - App Prep Audit`"
+        assert _extract_cron_session_title(response) == "Grisham Estate - App Prep Audit"
+
+    def test_build_session_title_falls_back_to_job_name(self):
+        from cron.scheduler import _build_cron_session_title
+
+        title = _build_cron_session_title(
+            "Application Prep Filing Readiness",
+            "abc123",
+            "No explicit title here.",
+        )
+        assert title.startswith("Application Prep Filing Readiness · ")
+
+    def test_build_session_title_prefers_explicit_hint(self):
+        from cron.scheduler import _build_cron_session_title
+
+        title = _build_cron_session_title(
+            "Application Prep Filing Readiness",
+            "abc123",
+            "Session title: Grisham Estate - App Prep Audit",
+        )
+        assert title.startswith("Grisham Estate - App Prep Audit · ")
+
+
 class TestBuildJobPromptWithScript:
     """Test that script output is injected into the prompt."""
 

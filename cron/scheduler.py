@@ -111,6 +111,59 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
         )
         return None
 
+
+_SESSION_TITLE_PREFIXES = (
+    "session title:",
+    "session_title:",
+    "cron session title:",
+    "desktop session title:",
+)
+
+
+def _extract_cron_session_title(text: str) -> str:
+    """Extract an explicit desktop-session title hint from cron output.
+
+    Cron sessions are titled after the job name by default, which is useful for
+    generic jobs but poor for rotating matter/client audits. A cron prompt can
+    opt into a per-run title by including a line such as:
+
+        Session title: Grisham Estate - App Prep Audit
+
+    The scheduler strips that machine-readable hint from the title value only;
+    the final response itself is left unchanged for delivery/logging.
+    """
+    if not text:
+        return ""
+
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Allow common Markdown list/emphasis wrappers without making the
+        # parser clever enough to surprise people.
+        line = line.lstrip("-*	 ").strip()
+        line = line.replace("**", "").replace("__", "")
+        lower = line.lower()
+        for prefix in _SESSION_TITLE_PREFIXES:
+            if lower.startswith(prefix):
+                title = line[len(prefix):].strip()
+                title = title.strip(" `*_\"'")
+                # Leave room for the scheduler's " · Jun 19 18:50" suffix and
+                # SessionDB's 100-char title limit.
+                return title[:80].strip()
+    return ""
+
+
+def _build_cron_session_title(job_name: str, job_id: str, final_response: str) -> str:
+    """Return the session title to store for a completed cron run."""
+    title_hint = _extract_cron_session_title(final_response)
+    if title_hint:
+        title_base = title_hint
+    else:
+        title_base = " ".join(str(job_name or "").split())[:60].strip() or f"cron {job_id}"
+    return f"{title_base} · {_hermes_now().strftime('%b %d %H:%M')}"
+
+
 # Valid delivery platforms — used to validate user-supplied platform names
 # in cron delivery targets, preventing env var enumeration via crafted names.
 _KNOWN_DELIVERY_PLATFORMS = frozenset({
@@ -1934,8 +1987,7 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             # system_prompt; this only UPDATEs the title column. The run-time
             # suffix keeps it unique against the sessions.title index across runs.
             try:
-                _title_base = " ".join(job_name.split())[:60].strip() or f"cron {job_id}"
-                _cron_title = f"{_title_base} · {_hermes_now().strftime('%b %d %H:%M')}"
+                _cron_title = _build_cron_session_title(job_name, job_id, locals().get("final_response", ""))
                 _session_db.set_session_title(_cron_session_id, _cron_title)
             except (Exception, KeyboardInterrupt) as e:
                 logger.debug("Job '%s': failed to set cron session title: %s", job_id, e)
