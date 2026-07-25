@@ -104,4 +104,22 @@ describe('cron helpers are profile-scoped', () => {
     void getCronJobs()
     expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs')
   })
+
+  it('explicit ownership overrides the ambient profile for run reads and mutations', () => {
+    setApiRequestProfile('ambient')
+
+    void getCronJobRuns('job-1', 7, 'worker')
+    void updateCronJob('job-1', { enabled: false } as never, 'worker')
+    void pauseCronJob('job-1', 'worker')
+    void resumeCronJob('job-1', 'worker')
+    void triggerCronJob('job-1', 'worker')
+    void deleteCronJob('job-1', 'worker')
+
+    for (const call of api.mock.calls) {
+      expect(call[0].profile).toBe('worker')
+      expect(call[0].path).toContain('profile=worker')
+    }
+
+    expect(api.mock.calls[0][0].path).toBe('/api/cron/jobs/job-1/runs?limit=7&profile=worker')
+  })
 })

@@ -884,6 +884,7 @@ export interface CronJob {
   next_run_at?: null | string
   no_agent?: boolean
   prompt?: null | string
+  profile?: null | string
   provider?: null | string
   schedule?: CronJobSchedule
   schedule_display?: null | string

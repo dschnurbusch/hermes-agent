@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
 import { listAllProfileSessions, listSidebarSessions, type SessionInfo } from '@/hermes'
+import { hasValidCronJobVisibilityKeys } from '@/lib/cron-session-visibility'
 import { sameCronSignature } from '@/lib/session-signatures'
 import {
   isMessagingSource,
@@ -9,6 +10,7 @@ import {
   normalizeSessionSource
 } from '@/lib/session-source'
 import { gatewayActivationEpoch } from '@/store/gateway'
+import { $cronJobsHiddenFromSessions, setCronJobInSessions } from '@/store/cron'
 import {
   $pinnedSessionIds,
   $sessionsLimit,
@@ -29,6 +31,7 @@ import {
   mergeSessionPage,
   MESSAGING_SECTION_LIMIT,
   setCronSessions,
+  setCronSessionsAcquisitionTruncated,
   setMessagingPlatformTotals,
   setMessagingSessions,
   setMessagingTruncated,
@@ -52,6 +55,7 @@ const SIDEBAR_EXCLUDED_SOURCES = ['cron', 'kanban', 'subagent', 'tool', ...MESSA
 // The messaging slice is the inverse: drop cron + every local source so only
 // external-platform conversations remain, then split per platform in the UI.
 const MESSAGING_EXCLUDED_SOURCES = ['cron', ...LOCAL_SESSION_SOURCE_IDS]
+export const CRON_INBOX_ACQUISITION_LIMIT = 500
 
 // Drop rows the user just deleted/archived: ANY list fetch (full refresh,
 // "Load more" paging, a per-platform messaging page, the cron slice) can race
@@ -262,6 +266,13 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
 
       try {
         const limit = $sessionsLimit.get()
+        const hiddenCronJobKeys = $cronJobsHiddenFromSessions.get()
+        const cronRequestLimit = Math.min(
+          CRON_INBOX_ACQUISITION_LIMIT,
+          hasValidCronJobVisibilityKeys(hiddenCronJobKeys)
+            ? CRON_INBOX_ACQUISITION_LIMIT
+            : Math.max(CRON_SECTION_LIMIT, limit)
+        )
 
         // Require at least one message so abandoned/empty "Untitled" drafts (one
         // was created per TUI/desktop launch before the lazy-create fix) don't
@@ -280,7 +291,8 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
           recentsProfile: sessionProfile,
           recentsLimit: limit,
           recentsExclude: SIDEBAR_EXCLUDED_SOURCES,
-          cronLimit: CRON_SECTION_LIMIT,
+          cronProfile: sessionProfile,
+          cronLimit: cronRequestLimit,
           messagingLimit: MESSAGING_SECTION_LIMIT,
           messagingExclude: MESSAGING_EXCLUDED_SOURCES
         })
@@ -338,17 +350,26 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
               : next
           })
 
-          // Cron section: latest N cron sessions (kept so a pinned cron run still
-          // resolves via sessionByAnyId), signature-gated like above.
+          // Keep raw acquisition separate from the Sessions presentation model,
+          // while preserving the previous rows for profiles whose cron slice
+          // failed this refresh. Cap defensively even if an older backend
+          // over-returns, and apply mutation tombstones at ingestion.
           setCronSessions(prev => {
             const incoming = carryForwardFailedProfileSessions(
               prev,
               result.cron.sessions ?? [],
               result.cron.errors ?? result.errors
             )
+            const bounded = incoming.slice(0, CRON_INBOX_ACQUISITION_LIMIT)
+            const cronRows = dropTombstoned(bounded)
 
-            return sameCronSignature(prev, incoming) ? prev : incoming
+            return sameCronSignature(prev, cronRows) ? prev : cronRows
           })
+          setCronSessionsAcquisitionTruncated(prev =>
+            result.cron.errors?.length || result.errors?.length
+              ? prev
+              : result.cron.sessions.length >= cronRequestLimit
+          )
 
           // Messaging sections: drop any non-messaging source the broad exclude
           // didn't catch (custom sources stay in local recents), then split per
@@ -392,6 +413,14 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
     await refreshSessions()
   }, [refreshSessions])
 
+  const setCronJobSessionsVisibility = useCallback(
+    async (jobId: string, profile: null | string | undefined, shown: boolean) => {
+      setCronJobInSessions(jobId, profile, shown)
+      await refreshSessions()
+    },
+    [refreshSessions]
+  )
+
   // A filter searches the loaded page, so switching one on has to deepen the
   // page — otherwise "merged PRs" answers for the last 50 rows and reads as
   // "you only have 6 merged PRs". Clearing the filters hands the window back:
@@ -427,6 +456,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
     loadMoreSessions,
     refreshCronJobs,
     refreshMessagingSessions,
-    refreshSessions
+    refreshSessions,
+    setCronJobSessionsVisibility
   }
 }

@@ -181,8 +181,14 @@ export function primaryRouteSelectedSessionId(pathname: string, storeSelectedSes
   return routeSessionId(pathname) ?? storeSelectedSessionId
 }
 
-export function sessionRoute(sessionId: string): string {
-  return `${SESSION_ROUTE_PREFIX}${encodeURIComponent(sessionId)}`
+export function sessionRoute(sessionId: string, profile?: null | string): string {
+  const route = `${SESSION_ROUTE_PREFIX}${encodeURIComponent(sessionId)}`
+
+  return profile ? `${route}?profile=${encodeURIComponent(profile)}` : route
+}
+
+export function sessionProfileFromSearch(search: string): string | undefined {
+  return new URLSearchParams(search).get('profile')?.trim() || undefined
 }
 
 export function appViewForPath(pathname: string): AppView {

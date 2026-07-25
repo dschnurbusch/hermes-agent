@@ -10,8 +10,11 @@ import {
   connectionScopeSuffix,
   rescopeConnectionScopedStores
 } from '@/lib/connection-scoped'
+import { mergeSessionsForPresentation, visibleCronSessions } from '@/lib/cron-session-visibility'
 import { persistBoolean, persistString, readJson, storedBoolean, storedString, writeJson } from '@/lib/storage'
+import { $cronJobsHiddenFromSessions } from '@/store/cron'
 import { syncCronModelImpactConnection } from '@/store/cron-model-impact-scope'
+import { $sessionsLimit } from '@/store/layout'
 import type { SessionInfo, UsageStats } from '@/types/hermes'
 
 import { isSessionRemovalPending } from './session-removal'
@@ -771,11 +774,20 @@ export const $sessions = atom<SessionInfo[]>([])
 // scheduler's always-newest sessions never crowd recents out of the page
 // budget. Powers the collapsed "Cron jobs" sidebar section.
 export const $cronSessions = atom<SessionInfo[]>([])
-// Max cron sessions fetched for the sidebar section (single bounded page). When
-// the fetch returns exactly this many rows we know more exist, so the section
-// badge renders "N+". Lives here so the controller (fetch) and sidebar (badge)
-// share one source of truth without a circular import.
 export const CRON_SECTION_LIMIT = 50
+const $cronSessionsAcquisitionTruncated = atom<boolean>(false)
+// Hide is a Sessions-feed presentation preference. Raw cron rows remain in
+// $cronSessions so Pins and full-text Search keep their existing behavior.
+export const $cronSessionsInSessionList = computed(
+  [$cronSessions, $cronJobsHiddenFromSessions, $sessionsLimit],
+  (rows, hiddenJobs, limit) => visibleCronSessions(rows, hiddenJobs).slice(0, limit)
+)
+export const $cronSessionsTruncated = computed(
+  [$cronSessions, $cronJobsHiddenFromSessions, $sessionsLimit, $cronSessionsAcquisitionTruncated],
+  (rows, hiddenJobs, limit, acquisitionTruncated) =>
+    acquisitionTruncated || visibleCronSessions(rows, hiddenJobs).length > limit
+)
+export const $presentedSessions = computed([$sessions, $cronSessionsInSessionList], mergeSessionsForPresentation)
 // Messaging-platform sessions (telegram/discord/...) are fetched as their own
 // slice — separate from local recents — so each platform renders a
 // self-managed sidebar section and never interleaves with (or buries) local
@@ -1182,6 +1194,8 @@ export const setConnection = (next: Updater<HermesConnection | null>) => {
 export const setGatewayState = (next: Updater<ConnectionState>) => updateAtom($gatewayState, next)
 export const setSessions = (next: Updater<SessionInfo[]>) => updateAtom($sessions, next)
 export const setCronSessions = (next: Updater<SessionInfo[]>) => updateAtom($cronSessions, next)
+export const setCronSessionsAcquisitionTruncated = (next: Updater<boolean>) =>
+  updateAtom($cronSessionsAcquisitionTruncated, next)
 export const setMessagingSessions = (next: Updater<SessionInfo[]>) => updateAtom($messagingSessions, next)
 export const setMessagingPlatformTotals = (next: Updater<Record<string, number>>) =>
   updateAtom($messagingPlatformTotals, next)

@@ -140,6 +140,54 @@ describe('Hermes REST helpers', () => {
     expect(api).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'local', path: '/api/profiles' }))
   })
 
+  it('uses concrete cron_profile only with capability proof and falls back correctly for an old backend', async () => {
+    api.mockImplementation(({ path }: { path: string }) => {
+      if (path.startsWith('/api/profiles/sessions/sidebar')) {
+        return Promise.resolve({
+          recents: { sessions: [], total: 0 },
+          cron: { sessions: [{ id: 'wrong-all-profile' }] },
+          messaging: { sessions: [] }
+        })
+      }
+
+      return Promise.resolve(emptySessionsResponse)
+    })
+
+    await listSidebarSessions({
+      recentsProfile: 'work',
+      recentsLimit: 30,
+      recentsExclude: ['cron'],
+      cronProfile: 'work',
+      cronLimit: 500,
+      messagingLimit: 100,
+      messagingExclude: ['cron']
+    })
+
+    const paths = api.mock.calls.map(call => (call[0] as { path: string }).path)
+
+    expect(paths[0]).toContain('cron_profile=work')
+    expect(paths).toHaveLength(4)
+    expect(paths.slice(1)).toContainEqual(expect.stringContaining('profile=work'))
+    expect(paths.slice(1)).toContainEqual(expect.stringContaining('source=cron'))
+  })
+
+  it('keeps All Profiles on the batched response when an old backend has no cron capability marker', async () => {
+    api.mockResolvedValue({ recents: { sessions: [] }, cron: { sessions: [] }, messaging: { sessions: [] } })
+
+    await listSidebarSessions({
+      recentsProfile: 'all',
+      recentsLimit: 20,
+      recentsExclude: [],
+      cronProfile: 'all',
+      cronLimit: 50,
+      messagingLimit: 100,
+      messagingExclude: []
+    })
+
+    expect(api).toHaveBeenCalledTimes(1)
+    expect((api.mock.calls[0][0] as { path: string }).path).toContain('cron_profile=all')
+  })
+
   it('routes the batched sidebar refresh through the active backend scope', async () => {
     setApiRequestConnection('cubi')
     setApiRequestProfile('default')

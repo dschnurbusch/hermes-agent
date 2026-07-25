@@ -44,7 +44,7 @@ import { $billingSettingsRequest } from '@/store/billing-block'
 import { $desktopBoot } from '@/store/boot'
 import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
-import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
+import { $cronReviewRequest, setCronFocusJob } from '@/store/cron'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
 import { notifyError } from '@/store/notifications'
 import { $previewTarget } from '@/store/preview'
@@ -52,7 +52,6 @@ import {
   $activeGatewayProfile,
   $freshSessionRequest,
   $profileScope,
-  ALL_PROFILES,
   ensureGatewayProfile,
   newSessionInProfile,
   normalizeProfileKey,
@@ -109,6 +108,7 @@ import {
   CRON_ROUTE,
   navigateToWorkspacePage,
   routeSessionId,
+  sessionProfileFromSearch,
   sessionRoute,
   SETTINGS_ROUTE,
   syncWorkspaceRoute
@@ -234,6 +234,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const boot = useStore($desktopBoot)
 
   const routedSessionId = routeSessionId(location.pathname)
+  const routedSessionProfile = sessionProfileFromSearch(location.search)
   const routedSessionIdRef = useRef(routedSessionId)
 
   routedSessionIdRef.current = routedSessionId
@@ -313,8 +314,15 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     [ambientRequestGateway, runtimeIdByStoredSessionIdRef, selectedStoredSessionIdRef, sessionStateByRuntimeIdRef]
   )
 
-  const { loadMoreMessagingForPlatform, loadMoreSessions, refreshCronJobs, refreshMessagingSessions, refreshSessions } =
-    useSessionListActions({ profileScope })
+  const {
+    loadMoreMessagingForPlatform,
+    loadMoreSessions,
+    loadMoreSessionsForProfile,
+    refreshCronJobs,
+    refreshMessagingSessions,
+    refreshSessions,
+    setCronJobSessionsVisibility
+  } = useSessionListActions({ profileScope })
 
   const updateActiveSessionRuntimeInfo = useCallback(
     (info: { branch?: string; cwd?: string }) => {
@@ -727,6 +735,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     freshDraftReady,
     gatewayState,
     locationPathname: location.pathname,
+    routedSessionProfile,
     resumeSession,
     resumeFailedSessionId,
     resumeExhaustedSessionId,
@@ -986,8 +995,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     onEdit: editMessage,
     onLoadMoreMessaging: loadMoreMessagingForPlatform,
     onLoadMoreSessions: loadMoreSessions,
-    onManageCronJob: jobId => {
-      setCronFocusJobId(jobId)
+    onManageCronJob: (jobId, profile) => {
+      setCronFocusJob({ id: jobId, profile })
       navigate(CRON_ROUTE)
     },
     onNavigate: selectSidebarItem,
@@ -1023,14 +1032,15 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       openSession(sessionId, navigate)
     },
+    onSetCronJobSessionsVisibility: setCronJobSessionsVisibility,
     onRetryResume: sessionId => void resumeSession(sessionId, true),
     onSteer: steerPrompt,
     onSubmit: submitText,
     onThreadMessagesChange: handleThreadMessagesChange,
     onToggleSelectedPin: toggleSelectedPin,
     onTranscribeAudio: transcribeVoiceAudio,
-    onTriggerCronJob: jobId =>
-      triggerAndRefreshCronJobs(jobId, profileScope === ALL_PROFILES ? 'all' : profileScope)
+    onTriggerCronJob: (jobId, profile) =>
+      triggerAndRefreshCronJobs(jobId, profile?.trim() || 'default')
         .then(() => undefined)
         .catch(() => undefined),
     getGateway: () => gatewayRef.current,
@@ -1235,7 +1245,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
         <Suspense fallback={null}>
           <CronView
             onClose={closeOverlayToPreviousRoute}
-            onOpenSession={sessionId => openSession(sessionId, navigate)}
+            onOpenSession={(sessionId, profile) =>
+              profile ? navigate(sessionRoute(sessionId, profile)) : openSession(sessionId, navigate)
+            }
+            onSetSessionsVisibility={setCronJobSessionsVisibility}
           />
         </Suspense>
       )}

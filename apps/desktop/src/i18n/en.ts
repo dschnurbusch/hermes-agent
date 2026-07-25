@@ -2194,6 +2194,8 @@ export const en: Translations = {
     manage: 'Manage',
     showRuns: 'Show runs',
     hideRuns: 'Hide runs',
+    showInSessionsList: 'Show in Sessions',
+    hideFromSessionsList: 'Hide from Sessions',
     runHistory: 'Run history',
     actionsTitle: 'Cron job actions',
     resume: 'Resume cron',

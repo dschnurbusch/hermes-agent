@@ -1793,6 +1793,8 @@ export const zhHant = defineLocale({
     manage: '管理',
     showRuns: '顯示執行記錄',
     hideRuns: '隱藏執行記錄',
+    showInSessionsList: '在工作階段中顯示',
+    hideFromSessionsList: '從工作階段中隱藏',
     runHistory: '執行記錄',
 
     actionsTitle: '排程工作動作',

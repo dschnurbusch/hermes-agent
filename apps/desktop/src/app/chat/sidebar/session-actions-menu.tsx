@@ -102,6 +102,9 @@ interface SessionActions {
   /** Backend-derived read state — drives the Mark as unread/read label. */
   unread?: boolean
   profile?: string
+  /** Cron rows are readable/resumable here, but their profile-blind legacy
+   * archive/delete actions are intentionally not exposed. */
+  hideDestructiveActions?: boolean
   onPin?: () => void
   /** Toggle the persisted read-state watermark for this row. */
   onToggleUnread?: () => void
@@ -187,6 +190,7 @@ function useSessionActions({
   pinned = false,
   unread = false,
   profile,
+  hideDestructiveActions = false,
   onPin,
   onToggleUnread,
   onBranch,
@@ -428,36 +432,40 @@ function useSessionActions({
       : []
 
   // DANGER — put it away / destroy it (delete stays last, destructive-red).
-  const dangerItems: ActionItemSpec[] = [
-    spec({
-      disabled: !onArchive,
-      icon: 'archive',
-      label: r.archive,
-      onSelect: () => {
-        triggerHaptic('selection')
-        onArchive?.()
-      }
-    }),
-    {
-      className: 'text-destructive focus:text-destructive',
-      disabled: !onDelete,
-      icon: 'trash',
-      label: t.common.delete,
-      onSelect: () => {
-        triggerHaptic('warning')
+  const dangerItems: ActionItemSpec[] = hideDestructiveActions
+    ? []
+    : [
+        spec({
+          disabled: !onArchive,
+          icon: 'archive',
+          key: 'archive',
+          label: r.archive,
+          onSelect: () => {
+            triggerHaptic('selection')
+            onArchive?.()
+          }
+        }),
+        {
+          className: 'text-destructive focus:text-destructive',
+          disabled: !onDelete,
+          icon: 'trash',
+          key: 'delete',
+          label: t.common.delete,
+          onSelect: () => {
+            triggerHaptic('warning')
 
-        // Deleting is irreversible (the CLI path asks y/N; the desktop used to
-        // fire instantly on click). Gate it behind an explicit confirm — see
-        // #61470. The dialog owns the delete call, so every surface that routes
-        // through this menu (sidebar rows, tab menus, the chat header) gets the
-        // guard for free.
-        if (onDelete) {
-          setDeleteOpen(true)
+            // Deleting is irreversible (the CLI path asks y/N; the desktop used to
+            // fire instantly on click). Gate it behind an explicit confirm — see
+            // #61470. The dialog owns the delete call, so every surface that routes
+            // through this menu (sidebar rows, tab menus, the chat header) gets the
+            // guard for free.
+            if (onDelete) {
+              setDeleteOpen(true)
+            }
+          },
+          variant: 'destructive'
         }
-      },
-      variant: 'destructive'
-    }
-  ]
+      ]
 
   const renderItems = (kit: MenuKit) => (
     <>
@@ -500,8 +508,12 @@ function useSessionActions({
           {tabItems.map(item => renderActionItem(kit, item))}
         </>
       )}
-      <kit.Separator />
-      {dangerItems.map(item => renderActionItem(kit, item))}
+      {dangerItems.length > 0 && (
+        <>
+          <kit.Separator />
+          {dangerItems.map(item => renderActionItem(kit, item))}
+        </>
+      )}
       {onHideTabBar && (
         <>
           <kit.Separator />

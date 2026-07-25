@@ -1867,6 +1867,8 @@ export const ja = defineLocale({
     manage: '管理',
     showRuns: '実行履歴を表示',
     hideRuns: '実行履歴を隠す',
+    showInSessionsList: 'セッションに表示',
+    hideFromSessionsList: 'セッションから非表示',
     runHistory: '実行履歴',
 
     actionsTitle: 'Cron ジョブのアクション',

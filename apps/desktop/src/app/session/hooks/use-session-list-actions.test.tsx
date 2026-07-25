@@ -3,7 +3,9 @@ import { Suspense } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SessionInfo, SidebarSessionsResponse } from '@/hermes'
-import { $cronJobs, setCronJobs } from '@/store/cron'
+import { cronJobVisibilityKey } from '@/lib/cron-session-visibility'
+import { $cronJobs, $cronJobsHiddenFromSessions, setCronJobs } from '@/store/cron'
+import { $sessionsLimit, resetSessionsLimit, SIDEBAR_SESSIONS_PAGE_SIZE } from '@/store/layout'
 import {
   beginGatewaySwitch,
   endGatewaySwitch,
@@ -12,6 +14,8 @@ import {
 } from '@/store/gateway-switch'
 import {
   $cronSessions,
+  $cronSessionsInSessionList,
+  $cronSessionsTruncated,
   $messagingPlatformTotals,
   $messagingSessions,
   $messagingTruncated,
@@ -20,6 +24,7 @@ import {
   $sessions,
   $sessionsLoading,
   setCronSessions,
+  setCronSessionsAcquisitionTruncated,
   setMessagingPlatformTotals,
   setMessagingSessions,
   setMessagingTruncated,
@@ -74,6 +79,7 @@ const listSidebarSessions = vi.fn()
 const listAllProfileSessions = vi.fn()
 const getCronJobs = vi.fn()
 const gatewayScope = vi.hoisted(() => ({ epoch: 0 }))
+const getCronJobRuns = vi.fn()
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -85,6 +91,7 @@ interface Deferred<T> {
 vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getCronJobs: (...args: unknown[]) => getCronJobs(...args),
+  getCronJobRuns: (...args: unknown[]) => getCronJobRuns(...args),
   listAllProfileSessions: (...args: unknown[]) => listAllProfileSessions(...args),
   listSidebarSessions: (...args: unknown[]) => listSidebarSessions(...args)
 }))
@@ -109,10 +116,14 @@ beforeEach(() => {
   getCronJobs.mockResolvedValue([])
   listSidebarSessions.mockReset()
   listAllProfileSessions.mockReset()
+  getCronJobRuns.mockReset()
   removed.ids = new Set()
   setCronJobs([])
+  $cronJobsHiddenFromSessions.set([])
+  resetSessionsLimit()
   setSessions([])
   setCronSessions([])
+  setCronSessionsAcquisitionTruncated(false)
   setMessagingSessions([])
   setMessagingPlatformTotals({})
   setMessagingTruncated(false)
@@ -125,12 +136,15 @@ afterEach(() => {
   setCronJobs([])
   setSessions([])
   setCronSessions([])
+  setCronSessionsAcquisitionTruncated(false)
   setMessagingSessions([])
   setMessagingPlatformTotals({})
   setMessagingTruncated(false)
   setSessionProfilesTruncated({})
   setSessionProfilesUsage({})
   setSessionsLoading(false)
+  $cronJobsHiddenFromSessions.set([])
+  resetSessionsLimit()
 })
 
 describe('refreshSessions identity + loading hygiene', () => {
@@ -477,6 +491,8 @@ describe('refreshSessions batches slices into one request', () => {
       expect.objectContaining({
         recentsProfile: 'work',
         recentsExclude: expect.arrayContaining(['cron']),
+        cronProfile: 'work',
+        cronLimit: 50,
         messagingExclude: expect.arrayContaining(['cron'])
       })
     )
@@ -607,7 +623,73 @@ describe('refreshSessions batches slices into one request', () => {
     expect($messagingSessions.get().map(session => session.id)).toEqual(['personal-chat'])
   })
 
-  it('scopes the cron-jobs fetch to the active profile', async () => {
+  it('filters hidden jobs before the Sessions limit and asks for one bounded cron window', async () => {
+    $cronJobsHiddenFromSessions.set([cronJobVisibilityKey('noisy', 'work')])
+    $sessionsLimit.set(SIDEBAR_SESSIONS_PAGE_SIZE)
+
+    const noisy = Array.from({ length: 55 }, (_, index) =>
+      row(`cron_noisy_${index}`, { profile: 'work', source: 'cron', started_at: 1_000 - index })
+    )
+
+    const useful = row('cron_useful_1', { profile: 'work', source: 'cron', started_at: 900 })
+
+    listSidebarSessions.mockResolvedValue(sidebar({ sessions: [] }, [...noisy, useful]))
+
+    const { result } = renderHook(() => useSessionListActions({ profileScope: 'work' }))
+
+    await act(async () => {
+      await result.current.refreshSessions()
+    })
+
+    expect(listSidebarSessions).toHaveBeenCalledWith(expect.objectContaining({ cronLimit: 500, cronProfile: 'work' }))
+    expect($cronSessionsInSessionList.get().map(session => session.id)).toEqual(['cron_useful_1'])
+    expect(getCronJobRuns).not.toHaveBeenCalled()
+  })
+
+  it.each([500, 550])('caps a %i-row cron response at 500 and keeps truncation conservative', async rowCount => {
+    $cronJobsHiddenFromSessions.set([cronJobVisibilityKey('hidden')])
+
+    const cron = Array.from({ length: rowCount }, (_, index) =>
+      row(`cron_visible_${index}`, { source: 'cron', started_at: 1_000 - index })
+    )
+
+    listSidebarSessions.mockResolvedValue(sidebar({ sessions: [] }, cron))
+
+    const { result } = renderHook(() => useSessionListActions({ profileScope: 'default' }))
+
+    await act(async () => {
+      await result.current.refreshSessions()
+    })
+
+    expect($cronSessions.get()).toHaveLength(500)
+    expect($cronSessionsTruncated.get()).toBe(true)
+    expect(listSidebarSessions).toHaveBeenCalledWith(expect.objectContaining({ cronLimit: 500 }))
+  })
+
+  it('recomputes from cache immediately and performs exactly one batched backfill', async () => {
+    setCronSessions([row('cron_daily_1', { source: 'cron' }), row('cron_weekly_1', { source: 'cron' })])
+    let resolveRefresh!: (value: SidebarSessionsResponse) => void
+    listSidebarSessions.mockReturnValue(
+      new Promise<SidebarSessionsResponse>(resolve => {
+        resolveRefresh = resolve
+      })
+    )
+    const { result } = renderHook(() => useSessionListActions({ profileScope: 'default' }))
+
+    let pending!: Promise<void>
+    act(() => {
+      pending = result.current.setCronJobSessionsVisibility('daily', 'default', false)
+    })
+
+    expect($cronSessionsInSessionList.get().map(session => session.id)).toEqual(['cron_weekly_1'])
+    expect(listSidebarSessions).toHaveBeenCalledTimes(1)
+    expect(getCronJobRuns).not.toHaveBeenCalled()
+
+    resolveRefresh(sidebar({ sessions: [] }, $cronSessions.get()))
+    await act(async () => pending)
+  })
+
+  it('scopes the cron-jobs fetch to the active profile (all → unified view)', async () => {
     listSidebarSessions.mockResolvedValue(sidebar({ sessions: [] }))
 
     const scoped = renderHook(() => useSessionListActions({ profileScope: 'work' }))

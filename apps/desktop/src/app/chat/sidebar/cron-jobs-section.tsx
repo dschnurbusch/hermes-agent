@@ -11,10 +11,11 @@ import { SidebarGroup, SidebarGroupContent } from '@/components/ui/sidebar'
 import { Tip } from '@/components/ui/tooltip'
 import { deleteCronJob, getCronJobRuns, pauseCronJob, resumeCronJob, type SessionInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { cronJobShownInSessions, cronJobVisibilityKey } from '@/lib/cron-session-visibility'
 import { fmtDayTime, relativeTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { confirm } from '@/store/confirm'
-import { updateCronJobs } from '@/store/cron'
+import { $cronJobsHiddenFromSessions, updateCronJobs } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
 import { $selectedStoredSessionId } from '@/store/session'
@@ -71,11 +72,12 @@ interface SidebarCronJobsSectionProps {
   label: string
   max?: number
   // Open a run session's chat (1 click to output).
-  onOpenRun: (sessionId: string) => void
+  onOpenRun: (sessionId: string, profile?: string) => void
   // Open the full Cron page focused on this job (manage / full history).
-  onManageJob: (jobId: string) => void
+  onManageJob: (jobId: string, profile?: null | string) => void
+  onSetSessionsVisibility: (jobId: string, profile: null | string | undefined, shown: boolean) => Promise<void> | void
   // Fire the job now.
-  onTriggerJob: (jobId: string) => Promise<void>
+  onTriggerJob: (jobId: string, profile?: null | string) => Promise<void>
   onToggle: () => void
   open: boolean
 }
@@ -86,32 +88,34 @@ export function SidebarCronJobsSection({
   max = 50,
   onManageJob,
   onOpenRun,
+  onSetSessionsVisibility,
   onTriggerJob,
   onToggle,
   open
 }: SidebarCronJobsSectionProps) {
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const hiddenFromSessions = useStore($cronJobsHiddenFromSessions)
   // Single-open inline peek so the section stays scannable.
-  const [peekJobId, setPeekJobId] = useState<null | string>(null)
+  const [peekJobKey, setPeekJobKey] = useState<null | string>(null)
   // Rows revealed so far; starts compact, grows in steps via "load more".
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_JOBS)
-  const [triggeringJobIds, setTriggeringJobIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [triggeringJobKeys, setTriggeringJobKeys] = useState<ReadonlySet<string>>(() => new Set())
   const triggerControllerRef = useRef<CronTriggerController | null>(null)
 
   // eslint-disable-next-line no-restricted-syntax -- controller mount identity, not an atom mirror
   useEffect(() => {
-    const controller = createCronTriggerController((jobId, running) => {
+    const controller = createCronTriggerController((key, running) => {
       if (triggerControllerRef.current !== controller) {
         return
       }
 
-      setTriggeringJobIds(current => {
+      setTriggeringJobKeys(current => {
         const next = new Set(current)
 
         if (running) {
-          next.add(jobId)
+          next.add(key)
         } else {
-          next.delete(jobId)
+          next.delete(key)
         }
 
         return next
@@ -125,14 +129,16 @@ export function SidebarCronJobsSection({
     }
   }, [])
 
-  const triggerJob = (jobId: string) => {
+  const triggerJob = (jobId: string, profile?: null | string) => {
     const controller = triggerControllerRef.current
 
     if (!controller) {
       return
     }
 
-    void controller.run(jobId, () => onTriggerJob(jobId)).catch(() => undefined)
+    const key = cronJobVisibilityKey(jobId, profile)
+
+    void controller.run(key, () => onTriggerJob(jobId, profile)).catch(() => undefined)
   }
 
   const visible = usePaneVisible()
@@ -195,15 +201,27 @@ export function SidebarCronJobsSection({
         <SidebarGroupContent className="scrollbar-fade flex max-h-72 flex-col gap-px overflow-x-hidden overflow-y-auto overscroll-contain pb-1.75 compact:max-h-none compact:overflow-visible">
           {shown.map(job => (
             <CronJobSidebarRow
-              busy={triggeringJobIds.has(job.id)}
-              expanded={peekJobId === job.id}
+              busy={triggeringJobKeys.has(cronJobVisibilityKey(job.id, job.profile))}
+              expanded={peekJobKey === cronJobVisibilityKey(job.id, job.profile)}
               job={job}
-              key={job.id}
+              key={cronJobVisibilityKey(job.id, job.profile)}
               nowMs={nowMs}
-              onManage={() => onManageJob(job.id)}
+              onManage={() => onManageJob(job.id, job.profile)}
               onOpenRun={onOpenRun}
-              onTogglePeek={() => setPeekJobId(prev => (prev === job.id ? null : job.id))}
-              onTrigger={() => triggerJob(job.id)}
+              onTogglePeek={() => {
+                const key = cronJobVisibilityKey(job.id, job.profile)
+
+                setPeekJobKey(previous => (previous === key ? null : key))
+              }}
+              onToggleSessions={() =>
+                void onSetSessionsVisibility(
+                  job.id,
+                  job.profile,
+                  !cronJobShownInSessions(hiddenFromSessions, job.id, job.profile)
+                )
+              }
+              onTrigger={() => triggerJob(job.id, job.profile)}
+              shownInSessions={cronJobShownInSessions(hiddenFromSessions, job.id, job.profile)}
             />
           ))}
           {hiddenCount > 0 && (
@@ -226,16 +244,20 @@ function CronJobSidebarRow({
   onManage,
   onOpenRun,
   onTogglePeek,
-  onTrigger
+  onToggleSessions,
+  onTrigger,
+  shownInSessions
 }: {
   busy: boolean
   expanded: boolean
   job: CronJob
   nowMs: number
   onManage: () => void
-  onOpenRun: (sessionId: string) => void
+  onOpenRun: (sessionId: string, profile?: string) => void
   onTogglePeek: () => void
+  onToggleSessions: () => void
   onTrigger: () => void
+  shownInSessions: boolean
 }) {
   const { t } = useI18n()
   const c = t.cron
@@ -245,6 +267,7 @@ function CronJobSidebarRow({
   const isPaused = state === 'paused'
 
   const meta = INACTIVE_STATES.has(state) ? (c.states[state] ?? state) : next !== null ? relativeTime(next, nowMs) : '—'
+  const key = cronJobVisibilityKey(job.id, job.profile)
 
   // Pause/resume and delete aren't threaded through the sidebar's prop chain, so
   // drive them against the shared $cronJobs atom directly (same path the cron
@@ -252,8 +275,9 @@ function CronJobSidebarRow({
   // row updates in place.
   const togglePause = async () => {
     try {
-      const updated = isPaused ? await resumeCronJob(job.id) : await pauseCronJob(job.id)
-      updateCronJobs(rows => rows.map(row => (row.id === job.id ? updated : row)))
+      const response = isPaused ? await resumeCronJob(job.id, job.profile) : await pauseCronJob(job.id, job.profile)
+      const updated = response.profile ? response : { ...response, profile: job.profile }
+      updateCronJobs(rows => rows.map(row => (cronJobVisibilityKey(row.id, row.profile) === key ? updated : row)))
       notify({ kind: 'success', title: isPaused ? c.resumed : c.paused, message: label })
     } catch (err) {
       notifyError(err, c.failedUpdate)
@@ -273,8 +297,8 @@ function CronJobSidebarRow({
     }
 
     try {
-      await deleteCronJob(job.id)
-      updateCronJobs(rows => rows.filter(row => row.id !== job.id))
+      await deleteCronJob(job.id, job.profile)
+      updateCronJobs(rows => rows.filter(row => cronJobVisibilityKey(row.id, row.profile) !== key))
       notify({ kind: 'success', title: c.deleted, message: label })
     } catch (err) {
       notifyError(err, c.failedDelete)
@@ -284,6 +308,12 @@ function CronJobSidebarRow({
   // One action set for both the hover buttons and the right-click menu.
   const items = (kit: MenuKit) => (
     <>
+      {renderActionItem(kit, {
+        icon: shownInSessions ? 'eye-closed' : 'eye',
+        key: 'sessions-visibility',
+        label: shownInSessions ? c.hideFromSessionsList : c.showInSessionsList,
+        onSelect: onToggleSessions
+      })}
       {renderActionItem(kit, { icon: 'zap', key: 'trigger', label: c.triggerNow, onSelect: onTrigger })}
       {renderActionItem(kit, {
         icon: isPaused ? 'play' : 'debug-pause',
@@ -316,6 +346,16 @@ function CronJobSidebarRow({
                 {meta}
               </span>
               <div className="hidden items-center gap-0.5 group-hover/cron:flex">
+                <Tip label={shownInSessions ? c.hideFromSessionsList : c.showInSessionsList}>
+                  <button
+                    aria-label={shownInSessions ? c.hideFromSessionsList : c.showInSessionsList}
+                    className="grid size-5 place-items-center rounded-sm text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background) hover:text-foreground"
+                    onClick={onToggleSessions}
+                    type="button"
+                  >
+                    <Codicon name={shownInSessions ? 'eye-closed' : 'eye'} size="0.75rem" />
+                  </button>
+                </Tip>
                 <Tip label={c.triggerNow}>
                   <button
                     aria-label={c.triggerNow}
@@ -377,12 +417,20 @@ function CronJobSidebarRow({
           </Tip>
         </SidebarRowShell>
       </ActionsContextMenu>
-      {expanded && <CronJobSidebarRuns jobId={job.id} onOpenRun={onOpenRun} />}
+      {expanded && <CronJobSidebarRuns jobId={job.id} onOpenRun={onOpenRun} profile={job.profile} />}
     </div>
   )
 }
 
-function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (sessionId: string) => void }) {
+function CronJobSidebarRuns({
+  jobId,
+  onOpenRun,
+  profile
+}: {
+  jobId: string
+  onOpenRun: (sessionId: string, profile?: string) => void
+  profile?: null | string
+}) {
   const { t } = useI18n()
   const c = t.cron
   const selectedSessionId = useStore($selectedStoredSessionId)
@@ -395,7 +443,7 @@ function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (s
     let cancelled = false
 
     const load = () =>
-      getCronJobRuns(jobId, PEEK_RUN_LIMIT)
+      getCronJobRuns(jobId, PEEK_RUN_LIMIT, profile)
         .then(result => {
           if (!cancelled) {
             setRuns(result)
@@ -432,7 +480,7 @@ function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (s
       window.clearInterval(intervalId)
     }
     // cronChangeTick: a fired run reloads the peek immediately.
-  }, [changeEventsAvailable, cronChangeTick, jobId, visible])
+  }, [changeEventsAvailable, cronChangeTick, jobId, profile, visible])
 
   return (
     <div className="mb-1 ml-[1.375rem] flex flex-col gap-px">
@@ -453,7 +501,7 @@ function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (s
                   : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
               )}
               key={run.id}
-              onClick={() => onOpenRun(run.id)}
+              onClick={() => onOpenRun(run.id, profile ?? undefined)}
               type="button"
             >
               {formatRunTime(run.last_active || run.started_at)}

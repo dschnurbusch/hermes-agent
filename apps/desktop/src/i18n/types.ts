@@ -1848,6 +1848,8 @@ export interface Translations {
     manage: string
     showRuns: string
     hideRuns: string
+    showInSessionsList: string
+    hideFromSessionsList: string
     runHistory: string
     actionsTitle: string
     resume: string

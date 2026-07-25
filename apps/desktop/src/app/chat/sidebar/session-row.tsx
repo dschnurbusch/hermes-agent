@@ -59,6 +59,7 @@ interface SidebarSessionRowProps extends React.ComponentProps<'div'> {
   isSelected: boolean
   /** Backend-derived read state — same value the dot paints. */
   unread: boolean
+  hideDestructiveActions?: boolean
   onArchive: () => void
   onBranch?: () => void
   onDelete: () => void
@@ -126,6 +127,7 @@ function SidebarSessionRowImpl({
   isPinned,
   isSelected,
   unread,
+  hideDestructiveActions = false,
   onArchive,
   onBranch,
   onDelete,
@@ -308,6 +310,7 @@ function SidebarSessionRowImpl({
         </span>
       ))}
       <SessionActionsMenu
+        hideDestructiveActions={hideDestructiveActions}
         onArchive={onArchive}
         onBranch={onBranch}
         onDelete={onDelete}
@@ -337,6 +340,7 @@ function SidebarSessionRowImpl({
 
   return (
     <SessionContextMenu
+      hideDestructiveActions={hideDestructiveActions}
       onArchive={onArchive}
       onBranch={onBranch}
       onDelete={onDelete}

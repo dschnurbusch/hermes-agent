@@ -314,7 +314,6 @@ import {
 import { migrateActiveProfileIfMissing as migrateActiveProfileIfMissingPure } from './profile-migration'
 import { prepareProfileRenameLifecycle, profileRenameFromRequest } from './profile-rename-routing'
 import {
-  buildSidebarSessionSliceParams,
   fetchPrimaryProfileSessions,
   fetchRegistrySessionRows,
   fetchRemoteProfileSessions,
@@ -361,6 +360,7 @@ import {
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
 import { ensureLoginShellPath } from './shell-path'
+import { fanOutSidebarSessions } from './sidebar-session-fanout'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
@@ -16126,27 +16126,7 @@ async function interceptSessionRequestForRemote(request) {
       return undefined // local fast path → batched endpoint's single DB open
     }
 
-    const { recents: recentsSp, cron: cronSp, messaging: messagingSp } = buildSidebarSessionSliceParams(searchParams)
-
-    const [recents, cron, messaging] = await Promise.all([
-      fetchProfilesSessionSlice(recentsSp, remoteProfiles),
-      fetchProfilesSessionSlice(cronSp, remoteProfiles),
-      fetchProfilesSessionSlice(messagingSp, remoteProfiles)
-    ])
-
-    return {
-      recents: {
-        sessions: rowsOf(recents),
-        total: Number(recents?.total) || 0,
-        profile_totals: recents?.profile_totals || {}
-      },
-      cron: { sessions: rowsOf(cron) },
-      messaging: {
-        sessions: rowsOf(messaging),
-        total: Number(messaging?.total) || rowsOf(messaging).length
-      },
-      errors: []
-    }
+    return fanOutSidebarSessions(searchParams, remoteProfiles, fetchProfilesSessionSlice)
   }
 
   // Per-session read/mutation. Owner is in ?profile= (reads) or request.profile
