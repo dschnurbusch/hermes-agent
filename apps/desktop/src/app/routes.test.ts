@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { NEW_CHAT_ROUTE, primaryRouteSelectedSessionId, sessionRoute, SETTINGS_ROUTE } from './routes'
+import {
+  NEW_CHAT_ROUTE,
+  primaryRouteSelectedSessionId,
+  sessionProfileFromSearch,
+  sessionRoute,
+  SETTINGS_ROUTE
+} from './routes'
 
 const SESS_A = 'sess-a'
 const SESS_B = 'sess-b'
@@ -26,5 +32,13 @@ describe('primaryRouteSelectedSessionId', () => {
 
   it('returns null on a non-chat route with no store selection', () => {
     expect(primaryRouteSelectedSessionId(SETTINGS_ROUTE, null)).toBeNull()
+  })
+})
+
+describe('profile-qualified session routes', () => {
+  it('keeps the raw id in the path and the owner in the query', () => {
+    expect(sessionRoute('same/raw', 'work profile')).toBe('/same%2Fraw?profile=work%20profile')
+    expect(sessionProfileFromSearch('?profile=work%20profile')).toBe('work profile')
+    expect(sessionProfileFromSearch('?profile=')).toBeUndefined()
   })
 })

@@ -7,6 +7,7 @@ import { type FC, useEffect, useRef } from 'react'
 
 import type { SessionInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { sessionPresentationKey } from '@/lib/cron-session-visibility'
 import { type SidebarListRow } from '@/lib/session-date-groups'
 import { sessionBucketLabel } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -17,21 +18,7 @@ import { SidebarDateDivider } from './chrome'
 import { SidebarSessionRow } from './session-row'
 import { sessionRowEstimate } from './session-row-details'
 
-interface SessionRowCommonProps {
-  branchStem?: string
-  card?: boolean
-  isPinned: boolean
-  isSelected: boolean
-  unread: boolean
-  onArchive: () => void
-  onBranch?: () => void
-  onDelete: () => void
-  onPin: () => void
-  onToggleUnread: () => void
-  onResume: () => void
-  reorderable?: boolean
-  showProfile?: boolean
-}
+type SessionRowCommonProps = Omit<React.ComponentProps<typeof SidebarSessionRow>, 'session'>
 
 export interface VirtualSessionListProps {
   activeSessionId: null | string
@@ -101,7 +88,7 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
     getItemKey: index => {
       const row = listRows[index]
 
-      return row ? (row.kind === 'divider' ? row.key : row.entry.session.id) : index
+      return row ? (row.kind === 'divider' ? row.key : sessionPresentationKey(row.entry.session)) : index
     },
     getScrollElement: () => scrollerRef.current,
     // jsdom-friendly default; the real rect takes over on first observe.
@@ -176,7 +163,7 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
 
     // Key by (profile, id): twins with the same stored id in two profiles are
     // distinct rows (#92454) — a bare-id key misattributes rendered state.
-    const rowKey = `${session.profile ?? ''}::${session.id}`
+    const rowKey = sessionPresentationKey(session)
 
     return reorderable ? (
       <div data-index={virtualItem.index} key={rowKey} ref={virtualizer.measureElement} style={itemStyle}>

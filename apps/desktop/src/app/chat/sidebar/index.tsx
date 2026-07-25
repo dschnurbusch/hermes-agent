@@ -25,6 +25,7 @@ import { Tip, TipKeybindLabel } from '@/components/ui/tooltip'
 import { useContributions } from '@/contrib/react/use-contributions'
 import { searchSessions, type SessionInfo, type SessionSearchResult } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { mergeSessionsForPresentation, sessionsFeedShowsLoadMore } from '@/lib/cron-session-visibility'
 import { comboTokens } from '@/lib/keybinds/combo'
 import { sessionMatchesSearch } from '@/lib/session-search'
 import { normalizeSessionSource, sessionSourceLabel } from '@/lib/session-source'
@@ -113,11 +114,13 @@ import {
 import { openRouteTile } from '@/store/route-tiles'
 import {
   $cronSessions,
+  $cronSessionsTruncated,
   $currentCwd,
   $gatewayState,
   $messagingPlatformTotals,
   $messagingSessions,
   $messagingTruncated,
+  $presentedSessions,
   $sessionProfilesTruncated,
   $sessions,
   $sessionsLoading,
@@ -377,8 +380,13 @@ interface ChatSidebarProps extends React.ComponentProps<typeof Sidebar> {
    *  buttons), which land a fresh session exactly where it's dropped. The
    *  context-menu "Open in split" path passes just a `dir`. */
   onNewSessionSplit: NewSessionSplitHandler
-  onManageCronJob: (jobId: string) => void
-  onTriggerCronJob: (jobId: string) => Promise<void>
+  onManageCronJob: (jobId: string, profile?: null | string) => void
+  onSetCronJobSessionsVisibility: (
+    jobId: string,
+    profile: null | string | undefined,
+    shown: boolean
+  ) => Promise<void> | void
+  onTriggerCronJob: (jobId: string, profile?: null | string) => Promise<void>
 }
 
 export function ChatSidebar({
@@ -393,6 +401,7 @@ export function ChatSidebar({
   onNewSessionInWorkspace,
   onNewSessionSplit,
   onManageCronJob,
+  onSetCronJobSessionsVisibility,
   onTriggerCronJob
 }: ChatSidebarProps) {
   const { t } = useI18n()
@@ -466,6 +475,8 @@ export function ChatSidebar({
   const currentView = focusedSessionIsTile ? 'chat' : routeView
   const sessions = useStore($sessions)
   const cronSessions = useStore($cronSessions)
+  const cronSessionsTruncated = useStore($cronSessionsTruncated)
+  const presentedSessions = useStore($presentedSessions)
   const cronJobs = useStore($cronJobs)
   const messagingSessions = useStore($messagingSessions)
   const messagingPlatformTotals = useStore($messagingPlatformTotals)
@@ -644,13 +655,30 @@ export function ChatSidebar({
     [scopedSessions, filtersNarrow, sessionMatchesFilters]
   )
 
+  const visiblePresentedSessions = useMemo(
+    () =>
+      showAllProfiles
+        ? presentedSessions
+        : presentedSessions.filter(s => normalizeProfileKey(s.profile) === profileScope),
+    [presentedSessions, profileScope, showAllProfiles]
+  )
+
+  const searchableSessions = useMemo(() => {
+    const visibleCron = showAllProfiles
+      ? cronSessions
+      : cronSessions.filter(s => normalizeProfileKey(s.profile) === profileScope)
+
+    return mergeSessionsForPresentation(visibleSessions, visibleCron)
+  }, [cronSessions, profileScope, showAllProfiles, visibleSessions])
+
   // Recents by activity (last_active || started_at). User send stamps
   // last_active immediately. Ordering by status doesn't sort here — it re-slots
   // rows *inside* whatever dividers are on, via sortOrderIds below — so the
-  // date buckets stay chronological either way.
+  // date buckets stay chronological either way. Cron rows join only at this
+  // presentation boundary.
   const sortedSessions = useMemo(
-    () => [...visibleSessions].sort((a, b) => sessionTime(b) - sessionTime(a)),
-    [visibleSessions]
+    () => [...visiblePresentedSessions].sort((a, b) => sessionTime(b) - sessionTime(a)),
+    [visiblePresentedSessions]
   )
 
   const visibleCronSessions = useMemo(
@@ -761,8 +789,8 @@ export function ChatSidebar({
   }, [trimmedQuery])
 
   const searchResults = useMemo(
-    () => mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending),
-    [sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending]
+    () => mergeSearchResults(searchableSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending),
+    [searchableSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending]
   )
 
   const unpinnedAgentSessions = useMemo(
@@ -1378,7 +1406,7 @@ export function ChatSidebar({
 
   // The archived view is its own (single, capped) query — paging the live
   // sessions list from under it would just fold un-archived rows back in.
-  const hasMoreSessions =
+  const ordinaryHasMoreSessions =
     !showArchived &&
     (showAllProfiles
       ? Object.values(sessionProfilesTruncated).some(Boolean)
@@ -1804,10 +1832,16 @@ export function ChatSidebar({
                   )
                 }
                 footer={
-                  // Hidden only when workspace-grouped — those groups page
-                  // themselves. Profile groups don't: this one footer fetches the
-                  // next page, which grows every profile at once.
-                  !agentsGrouped && !showSessionSkeletons && hasMoreSessions ? (
+                  // Ordinary All-Profiles paging stays on each profile header,
+                  // but cron owns one shared bounded window.
+                  !showArchived &&
+                  sessionsFeedShowsLoadMore({
+                    agentsGrouped,
+                    cronTruncated: cronSessionsTruncated,
+                    ordinaryHasMore: ordinaryHasMoreSessions,
+                    sessionsLoading: showSessionSkeletons,
+                    showAllProfiles
+                  }) ? (
                     <SidebarLoadMoreRow
                       loading={sessionsLoading || recentsLoadMorePending}
                       onClick={() => void onLoadMoreRecents()}
@@ -2011,6 +2045,7 @@ export function ChatSidebar({
                 label={s.cronJobs}
                 onManageJob={onManageCronJob}
                 onOpenRun={onResumeSession}
+                onSetSessionsVisibility={onSetCronJobSessionsVisibility}
                 onToggle={() => setSidebarCronOpen(!cronOpen)}
                 onTriggerJob={onTriggerCronJob}
                 open={cronOpen}

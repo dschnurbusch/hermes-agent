@@ -12,6 +12,7 @@ import {
   $unreadFinishedSessionIds,
   setActiveSessionId,
   setCronSessions,
+  setCronSessionsAcquisitionTruncated,
   setCurrentBranch,
   setCurrentCwdTransient,
   setFreshDraftReady,
@@ -199,6 +200,7 @@ export function wipeSessionListsForGatewaySwitch(): void {
   setCronSessions([])
   invalidateCronJobsRequests()
   setCronJobs([])
+  setCronSessionsAcquisitionTruncated(false)
   setMessagingSessions([])
   setMessagingPlatformTotals({})
   setMessagingTruncated(false)

@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type * as React from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -27,6 +27,7 @@ vi.mock('@/i18n', () => ({
 }))
 
 const mockVirtualListPropsHistory: VirtualSessionListProps[] = []
+const renderedRowProps = vi.hoisted(() => new Map<string, Record<string, unknown>>())
 
 vi.mock('./virtual-session-list', () => ({
   VirtualSessionList: (props: VirtualSessionListProps) => {
@@ -37,9 +38,19 @@ vi.mock('./virtual-session-list', () => ({
 }))
 
 vi.mock('./session-row', () => ({
-  SidebarSessionRow: ({ session }: { session: SessionInfo }) => (
-    <div data-testid={`session-row-${session.id}`}>{session.id}</div>
-  )
+  SidebarSessionRow: (props: { onResume: () => void; session: SessionInfo }) => {
+    renderedRowProps.set(`${props.session.profile}-${props.session.id}`, props as unknown as Record<string, unknown>)
+
+    return (
+      <button
+        data-testid={`session-${props.session.profile}-${props.session.id}`}
+        onClick={props.onResume}
+        type="button"
+      >
+        {props.session.profile}/{props.session.id}
+      </button>
+    )
+  }
 }))
 
 function makeSession(id: string, startedAt = 1000): SessionInfo {
@@ -180,5 +191,105 @@ describe('SidebarSessionsSection memoization & virtualizer stability', () => {
 
     const thirdRowsRef = mockVirtualListPropsHistory[2].rows
     expect(thirdRowsRef).not.toBe(secondRowsRef)
+  })
+})
+
+const ownedSession = (profile: string, source = 'desktop'): SessionInfo =>
+  ({
+    archived: false,
+    cwd: null,
+    ended_at: null,
+    id: 'same',
+    input_tokens: 0,
+    is_active: false,
+    last_active: 100,
+    message_count: 1,
+    model: null,
+    output_tokens: 0,
+    preview: null,
+    profile,
+    source,
+    started_at: 100,
+    title: `${profile} same`,
+    tool_call_count: 0
+  }) as SessionInfo
+
+describe('Sessions cron rows', () => {
+  it('opens a cron row with its actual owner', () => {
+    const onResumeSession = vi.fn()
+
+    render(
+      <SidebarSessionsSection
+        activeSessionId={null}
+        emptyState={null}
+        label="Sessions"
+        onArchiveSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onResumeSession={onResumeSession}
+        onToggle={vi.fn()}
+        onTogglePin={vi.fn()}
+        onToggleUnread={vi.fn()}
+        open
+        pinned={false}
+        sessions={[ownedSession('work', 'cron')]}
+        workingSessionIdSet={new Set()}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId('session-work-same'))
+
+    expect(onResumeSession).toHaveBeenCalledWith('same', 'work')
+  })
+
+  it('leaves ordinary row resume behavior profile-agnostic', () => {
+    const onResumeSession = vi.fn()
+
+    render(
+      <SidebarSessionsSection
+        activeSessionId={null}
+        emptyState={null}
+        label="Sessions"
+        onArchiveSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onResumeSession={onResumeSession}
+        onToggle={vi.fn()}
+        onTogglePin={vi.fn()}
+        onToggleUnread={vi.fn()}
+        open
+        pinned={false}
+        sessions={[ownedSession('work')]}
+        workingSessionIdSet={new Set()}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId('session-work-same'))
+
+    expect(onResumeSession).toHaveBeenCalledWith('same', undefined)
+  })
+
+  it('keeps cron rows wired to the shared archive and delete handlers', () => {
+    render(
+      <SidebarSessionsSection
+        activeSessionId={null}
+        emptyState={null}
+        label="Sessions"
+        onArchiveSession={vi.fn()}
+        onDeleteSession={vi.fn()}
+        onResumeSession={vi.fn()}
+        onToggle={vi.fn()}
+        onTogglePin={vi.fn()}
+        onToggleUnread={vi.fn()}
+        open
+        pinned={false}
+        sessions={[ownedSession('work', 'cron')]}
+        workingSessionIdSet={new Set()}
+      />
+    )
+
+    const props = renderedRowProps.get('work-same')
+
+    expect(props?.onArchive).toBeTypeOf('function')
+    expect(props?.onDelete).toBeTypeOf('function')
+    expect(props?.onResume).toBeTypeOf('function')
   })
 })

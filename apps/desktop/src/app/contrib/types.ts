@@ -21,6 +21,7 @@ export type SidebarActions = Pick<
   | 'onNewSessionInWorkspace'
   | 'onNewSessionSplit'
   | 'onResumeSession'
+  | 'onSetCronJobSessionsVisibility'
   | 'onTriggerCronJob'
 >
 

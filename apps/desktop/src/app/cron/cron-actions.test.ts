@@ -31,7 +31,7 @@ describe('triggerAndRefreshCronJobs', () => {
 
     const result = await triggerAndRefreshCronJobs('deleted-one-shot', 'work')
 
-    expect(triggerCronJob).toHaveBeenCalledWith('deleted-one-shot')
+    expect(triggerCronJob).toHaveBeenCalledWith('deleted-one-shot', 'work')
     expect(getCronJobs).toHaveBeenCalledWith('work')
     expect(result).toEqual({ jobs: authoritative, refreshError: null, stale: false })
   })

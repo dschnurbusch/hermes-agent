@@ -112,9 +112,15 @@ vi.mock('@/store/windows', () => ({
   openSessionInTerminal: vi.fn()
 }))
 
-function renderMenu() {
+function renderMenu({ hideDestructiveActions = false } = {}) {
   return render(
-    <SessionActionsMenu sessionId="s1" title="My session">
+    <SessionActionsMenu
+      hideDestructiveActions={hideDestructiveActions}
+      onArchive={vi.fn()}
+      onDelete={vi.fn()}
+      sessionId="s1"
+      title="My session"
+    >
       <button aria-label="Session actions" type="button">
         ⋮
       </button>
@@ -175,7 +181,6 @@ describe('SessionActionsMenu', () => {
         </button>
       </SessionActionsMenu>
     )
-
     const trigger = screen.getByRole('button', { name: 'Session actions' })
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
     fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
@@ -286,5 +291,18 @@ describe('SessionActionsMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(await screen.findByText('Session deleted')).toBeTruthy()
     expect(onDelete).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits destructive actions only when explicitly requested', async () => {
+    renderMenu({ hideDestructiveActions: true })
+
+    const trigger = screen.getByRole('button', { name: 'Session actions' })
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.click(trigger)
+
+    expect(await screen.findByRole('menu')).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: /archive/i })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull()
   })
 })

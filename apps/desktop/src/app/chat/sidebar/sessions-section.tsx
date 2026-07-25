@@ -10,6 +10,7 @@ import { SidebarGroup, SidebarGroupContent } from '@/components/ui/sidebar'
 import type { HermesGitWorktree } from '@/global'
 import type { SessionInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { sessionPresentationKey } from '@/lib/cron-session-visibility'
 import { flattenSessionsWithBranches } from '@/lib/session-branch-tree'
 import {
   groupEntriesByRecency,
@@ -295,9 +296,9 @@ export function SidebarSessionsSection({
       // are distinct rows (#92454) — a bare-id key makes React misattribute
       // one twin's rendered state to the other.
       return draggable && !branchStem ? (
-        <SortableSidebarSessionRow key={`${session.profile ?? ''}::${session.id}`} {...rowProps} />
+        <SortableSidebarSessionRow key={sessionPresentationKey(session)} {...rowProps} />
       ) : (
-        <SidebarSessionRow key={`${session.profile ?? ''}::${session.id}`} {...rowProps} />
+        <SidebarSessionRow key={sessionPresentationKey(session)} {...rowProps} />
       )
     },
     [
@@ -640,17 +641,7 @@ export function SidebarSessionsSection({
   )
 }
 
-interface SortableSessionRowProps {
-  session: SessionInfo
-  isPinned: boolean
-  isSelected: boolean
-  unread: boolean
-  onArchive: () => void
-  onDelete: () => void
-  onPin: () => void
-  onToggleUnread: () => void
-  onResume: () => void
-}
+type SortableSessionRowProps = React.ComponentProps<typeof SidebarSessionRow>
 
 function SortableSidebarSessionRow(props: SortableSessionRowProps) {
   return <SidebarSessionRow {...props} {...useSortableBindings(props.session.id)} />
