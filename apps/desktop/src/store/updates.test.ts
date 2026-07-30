@@ -13,6 +13,26 @@ vi.mock('@/lib/storage', () => ({
       storage.set(key, value)
     }
   },
+  readJson: <T>(key: string): T | null => {
+    const value = storage.get(key)
+
+    if (value === undefined) {
+      return null
+    }
+
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return null
+    }
+  },
+  writeJson: (key: string, value: unknown) => {
+    if (value === null) {
+      storage.delete(key)
+    } else {
+      storage.set(key, JSON.stringify(value))
+    }
+  },
   persistBoolean: (key: string, value: boolean) => {
     storage.set(key, String(value))
   },

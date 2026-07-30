@@ -34,7 +34,7 @@ export interface VirtualSessionListProps {
     open: (key: string) => boolean
   }
   rows: SidebarListRow[]
-  onArchiveSession: (sessionId: string) => void
+  onArchiveSession: (sessionId: string, profile?: string) => void
   onBranchSession?: (sessionId: string, profile?: string) => void
   onDeleteSession: (sessionId: string) => void
   onResumeSession: (sessionId: string, session?: SessionInfo) => void
@@ -150,9 +150,9 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
       card,
       isPinned: pinned,
       isSelected: session.id === activeSessionId,
-      onArchive: () => onArchiveSession(session.id),
+      onArchive: () => onArchiveSession(session.id, session.profile),
       onBranch: onBranchSession ? () => onBranchSession(session.id, session.profile) : undefined,
-      onDelete: () => onDeleteSession(session.id),
+      onDelete: session.source === 'cron' ? undefined : () => onDeleteSession(session.id),
       onPin: () => onTogglePin(sessionPinId(session)),
       onToggleUnread: () => onToggleUnread(session.id),
       onResume: () => onResumeSession(session.id, session),

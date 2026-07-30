@@ -2538,13 +2538,13 @@ export function useSessionActions({
   )
 
   const archiveSession = useCallback(
-    async (storedSessionId: string) => {
+    async (storedSessionId: string, sessionProfile?: string) => {
       clearNotifications()
 
-      const listed = findListedSession(storedSessionId)
+      const listed = findListedSession(storedSessionId, sessionProfile)
       const archived = listed?.session
       const stampedProfile = archived?.profile?.trim()
-      const profile = stampedProfile || (await resolveSessionProfile(storedSessionId))
+      const profile = stampedProfile || sessionProfile?.trim() || (await resolveSessionProfile(storedSessionId))
 
       if (
         listed &&
@@ -2557,15 +2557,18 @@ export function useSessionActions({
         return
       }
 
-      const wasSelected = selectedStoredSessionIdRef.current === storedSessionId
+      const ownerProfile = normalizeProfileKey(profile)
+      const wasSelected =
+        selectedStoredSessionIdRef.current === storedSessionId &&
+        normalizeProfileKey($activeGatewayProfile.get()) === ownerProfile
       const previousPinned = $pinnedSessionIds.get()
       // Pins are keyed on the durable lineage-root id; the stored id may be the
       // live tip after compression. Drop both so the pin can't linger.
       const archivedPinId = archived ? sessionPinId(archived) : storedSessionId
       const archivedIds = [storedSessionId, archived?.id, archived?._lineage_root_id]
 
-      // Soft-hide: drop from every sidebar slice immediately, keep the data.
-      dropListedSession(storedSessionId)
+      // Soft-hide: drop the targeted owner from every sidebar slice immediately, keep the data.
+      dropListedSession(storedSessionId, profile)
       tombstoneSessions(archivedIds)
       beginSessionMutation(archivedIds)
       $pinnedSessionIds.set(previousPinned.filter(id => id !== storedSessionId && id !== archivedPinId))

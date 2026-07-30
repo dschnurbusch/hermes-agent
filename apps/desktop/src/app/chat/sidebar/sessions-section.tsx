@@ -109,7 +109,7 @@ interface SidebarSessionsSectionProps {
   activeSessionId: null | string
   onResumeSession: (sessionId: string, session?: SessionInfo) => void
   onDeleteSession: (sessionId: string) => void
-  onArchiveSession: (sessionId: string) => void
+  onArchiveSession: (sessionId: string, profile?: string) => void
   onBranchSession?: (sessionId: string, profile?: string) => void
   onTogglePin: (sessionId: string) => void
   onToggleUnread: (sessionId: string) => void
@@ -264,9 +264,9 @@ export function SidebarSessionsSection({
         card,
         isPinned: pinned,
         isSelected: session.id === activeSessionId,
-        onArchive: () => onArchiveSession(session.id),
+        onArchive: () => onArchiveSession(session.id, session.profile),
         onBranch: onBranchSession ? () => onBranchSession(session.id, session.profile) : undefined,
-        onDelete: () => onDeleteSession(session.id),
+        onDelete: session.source === 'cron' ? undefined : () => onDeleteSession(session.id),
         onPin: () => onTogglePin(sessionPinId(session)),
         onToggleUnread: () => onToggleUnread(session.id),
         onResume: () => onResumeSession(session.id, session),

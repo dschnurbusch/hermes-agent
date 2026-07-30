@@ -4331,6 +4331,40 @@ describe('removeSession / archiveSession profile routing (#78836)', () => {
     expect($messagingSessions.get()).toEqual([])
   })
 
+  it('archives and removes only the targeted cron owner when ids collide', async () => {
+    const ordinary = storedSession({ id: 'same', profile: 'default' })
+    const cron = storedSession({ id: 'same', profile: 'winefox', source: 'cron' })
+    setSessions([ordinary])
+    setCronSessions([cron])
+    mockSetSessionArchived.mockResolvedValue({ ok: true })
+
+    const handle = await readyActions()
+    await act(async () => {
+      await handle.archiveSession('same', 'winefox')
+    })
+
+    expect($sessions.get()).toEqual([ordinary])
+    expect($cronSessions.get()).toEqual([])
+    expect(mockSetSessionArchived).toHaveBeenCalledWith('same', true, 'winefox')
+  })
+
+  it('restores the targeted cron owner when archive fails', async () => {
+    const ordinary = storedSession({ id: 'same', profile: 'default' })
+    const cron = storedSession({ id: 'same', profile: 'winefox', source: 'cron' })
+    setSessions([ordinary])
+    setCronSessions([cron])
+    mockSetSessionArchived.mockRejectedValue(new Error('archive failed'))
+
+    const handle = await readyActions()
+    await act(async () => {
+      await handle.archiveSession('same', 'winefox')
+    })
+
+    expect($sessions.get()).toEqual([ordinary])
+    expect($cronSessions.get()).toEqual([cron])
+    expect(mockSetSessionArchived).toHaveBeenCalledWith('same', true, 'winefox')
+  })
+
   it('restores a dual-listed messaging row to messaging, not recents', async () => {
     const row = storedSession({ id: 'tg-dual', profile: 'winefox', source: 'telegram' })
     setMessagingSessions([row])

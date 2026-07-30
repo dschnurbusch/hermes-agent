@@ -1329,9 +1329,13 @@ export function sessionShouldHaveTranscript(session: SessionInfo | undefined): b
 export type ListedSessionSlice = 'cron' | 'messaging' | 'sessions'
 
 export function findListedSession(
-  storedSessionId: string
+  storedSessionId: string,
+  sessionProfile?: string
 ): { session: SessionInfo; slice: ListedSessionSlice } | undefined {
-  const match = (session: SessionInfo) => sessionMatchesStoredId(session, storedSessionId)
+  const ownerProfile = sessionProfile ? normalizeProfileKey(sessionProfile) : null
+  const match = (session: SessionInfo) =>
+    sessionMatchesStoredId(session, storedSessionId) &&
+    (ownerProfile === null || normalizeProfileKey(session.profile) === ownerProfile)
   const fromMessaging = $messagingSessions.get().find(match)
 
   if (fromMessaging) {
@@ -1353,8 +1357,11 @@ export function findListedSession(
   return undefined
 }
 
-export function dropListedSession(storedSessionId: string): void {
-  const keep = (session: SessionInfo) => !sessionMatchesStoredId(session, storedSessionId)
+export function dropListedSession(storedSessionId: string, sessionProfile?: string): void {
+  const ownerProfile = sessionProfile ? normalizeProfileKey(sessionProfile) : null
+  const keep = (session: SessionInfo) =>
+    !sessionMatchesStoredId(session, storedSessionId) ||
+    (ownerProfile !== null && normalizeProfileKey(session.profile) !== ownerProfile)
 
   setSessions(prev => prev.filter(keep))
   setMessagingSessions(prev => prev.filter(keep))
