@@ -267,13 +267,15 @@ describe('Sessions cron rows', () => {
     expect(onResumeSession).toHaveBeenCalledWith('same', undefined)
   })
 
-  it('keeps cron rows wired to the shared archive and delete handlers', () => {
+  it('provides archive for a cron row and preserves its owner', () => {
+    const onArchiveSession = vi.fn()
+
     render(
       <SidebarSessionsSection
         activeSessionId={null}
         emptyState={null}
         label="Sessions"
-        onArchiveSession={vi.fn()}
+        onArchiveSession={onArchiveSession}
         onDeleteSession={vi.fn()}
         onResumeSession={vi.fn()}
         onToggle={vi.fn()}
@@ -289,7 +291,9 @@ describe('Sessions cron rows', () => {
     const props = renderedRowProps.get('work-same')
 
     expect(props?.onArchive).toBeTypeOf('function')
-    expect(props?.onDelete).toBeTypeOf('function')
+    expect(props?.onDelete).toBeUndefined()
     expect(props?.onResume).toBeTypeOf('function')
+    ;(props?.onArchive as (() => void) | undefined)?.()
+    expect(onArchiveSession).toHaveBeenCalledWith('same', 'work')
   })
 })

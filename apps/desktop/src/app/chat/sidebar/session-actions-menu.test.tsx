@@ -112,12 +112,11 @@ vi.mock('@/store/windows', () => ({
   openSessionInTerminal: vi.fn()
 }))
 
-function renderMenu({ hideDestructiveActions = false } = {}) {
+function renderMenu({ withDelete = true } = {}) {
   return render(
     <SessionActionsMenu
-      hideDestructiveActions={hideDestructiveActions}
       onArchive={vi.fn()}
-      onDelete={vi.fn()}
+      onDelete={withDelete ? vi.fn() : undefined}
       sessionId="s1"
       title="My session"
     >
@@ -212,7 +211,7 @@ describe('SessionActionsMenu', () => {
     expect(onDelete).toHaveBeenCalledTimes(1)
   })
 
-  it('disables the delete item when no onDelete is provided', async () => {
+  it('omits the delete item when no onDelete is provided', async () => {
     render(
       <SessionActionsMenu sessionId="s1" title="My session">
         <button aria-label="Session actions" type="button">
@@ -226,8 +225,8 @@ describe('SessionActionsMenu', () => {
     fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
     fireEvent.click(trigger)
 
-    const deleteItem = await screen.findByRole('menuitem', { name: /delete/i })
-    expect(deleteItem.getAttribute('aria-disabled')).toBe('true')
+    expect(await screen.findByRole('menu')).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull()
   })
 
   it('confirms with the Enter key and cancels with Escape', async () => {
@@ -293,8 +292,8 @@ describe('SessionActionsMenu', () => {
     expect(onDelete).toHaveBeenCalledTimes(1)
   })
 
-  it('omits destructive actions only when explicitly requested', async () => {
-    renderMenu({ hideDestructiveActions: true })
+  it('keeps Archive while omitting unavailable Delete', async () => {
+    renderMenu({ withDelete: false })
 
     const trigger = screen.getByRole('button', { name: 'Session actions' })
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
@@ -302,7 +301,7 @@ describe('SessionActionsMenu', () => {
     fireEvent.click(trigger)
 
     expect(await screen.findByRole('menu')).toBeTruthy()
-    expect(screen.queryByRole('menuitem', { name: /archive/i })).toBeNull()
+    expect(screen.getByRole('menuitem', { name: /archive/i })).toBeTruthy()
     expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull()
   })
 })
