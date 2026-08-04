@@ -1771,10 +1771,33 @@ def _get_pre_tool_call_directive_details(
     tool_call_id: str = "", turn_id: str = "", api_request_id: str = "",
     middleware_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> _PreToolCallDirective:
-    """Check ``pre_tool_call`` hooks for ``{"action": "block", "message"}`` (veto; message becomes
-    the tool result) or ``{"action": "approve", "message", "rule_key"?}`` (escalate ANY tool to the
-    human-approval gate; ``rule_key`` picks the ``[a]lways`` allowlist grain). First valid directive
-    wins; irrelevant returns are ignored."""
+    """Check ``pre_tool_call`` hooks for a blocking or approval directive.
+
+    Plugins that need to enforce policy (rate limiting, security
+    restrictions, approval workflows) can return one of::
+
+        {"action": "block",   "message": "Reason the tool was blocked"}
+        {"action": "approve", "message": "Why this needs human confirmation"}
+        {"action": "approve", "message": "...", "rule_key": "write_file:ssh"}
+
+    from their ``pre_tool_call`` callback.
+
+    - ``block`` vetoes the tool call outright (the message becomes the tool
+      result the model sees).
+    - ``approve`` ESCALATES to the existing human-approval gate
+      (``prompt_dangerous_approval`` on CLI, the approval callback on the
+      gateway) — the same mechanism Tier-2 dangerous shell patterns use.
+      This lets a plugin require a human ``[o]nce/[s]ession/[a]lways/[d]eny``
+      decision on ANY tool, not just terminal command strings. The caller is
+      responsible for invoking the gate (see
+      :func:`tools.approval.request_tool_approval`).
+    - ``rule_key`` is optional and only honored for ``approve`` directives. It
+      lets plugins choose the allowlist grain for `[a]lways` approvals.
+
+    Any valid block vetoes the call, regardless of plugin discovery order.
+    Otherwise the first valid approval directive wins. Invalid or irrelevant
+    hook return values are silently ignored so observer-only hooks are unaffected.
+    """
     allowed = getattr(_thread_tool_whitelist, "allowed", None)
     if allowed is not None and tool_name not in allowed:
         fmt = getattr(_thread_tool_whitelist, "fmt", "Tool '{tool_name}' denied")
@@ -1785,6 +1808,7 @@ def _get_pre_tool_call_directive_details(
         task_id=task_id, session_id=session_id, tool_call_id=tool_call_id, turn_id=turn_id,
         api_request_id=api_request_id, middleware_trace=list(middleware_trace or []),
     )
+    first_approval: Optional[_PreToolCallDirective] = None
     modified_args: Optional[Dict[str, Any]] = None
     for result in hook_results:
         if not isinstance(result, dict):
@@ -1806,9 +1830,26 @@ def _get_pre_tool_call_directive_details(
         # A block directive requires a message (it becomes the tool result); approve's is optional.
         if action == "block" and not message:
             continue
-        rule_key = result.get("rule_key") if action == "approve" else None
-        rule_key = (rule_key.strip() or None) if isinstance(rule_key, str) else None
-        return _PreToolCallDirective(action=action, message=message, rule_key=rule_key, modified_args=modified_args)
+        if action == "block":
+            return _PreToolCallDirective(
+                action="block", message=message, modified_args=modified_args,
+            )
+        rule_key = result.get("rule_key")
+        rule_key = rule_key.strip() if isinstance(rule_key, str) else None
+        if not rule_key:
+            rule_key = None
+        if first_approval is None:
+            first_approval = _PreToolCallDirective(
+                action="approve", message=message, rule_key=rule_key,
+            )
+
+    if first_approval is not None:
+        return _PreToolCallDirective(
+            action="approve",
+            message=first_approval.message,
+            rule_key=first_approval.rule_key,
+            modified_args=modified_args,
+        )
     return _PreToolCallDirective(modified_args=modified_args)
 
 
