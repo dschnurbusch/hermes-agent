@@ -5,6 +5,8 @@ import type { DesktopUpdateStatus } from '@/global'
 const storage = new Map<string, string>()
 
 vi.mock('@/lib/storage', () => ({
+  arraysEqual: (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((value, index) => value === b[index]),
   readKey: (key: string) => storage.get(key) ?? null,
   writeKey: (key: string, value: null | string) => {
     if (value === null) {
@@ -43,18 +45,15 @@ vi.mock('@/lib/storage', () => ({
       storage.set(key, value)
     }
   },
-  // store/session persists its exact owner hints through the JSON helpers.
-  readJson: (key: string) => {
-    const value = storage.get(key)
-
-    try {
-      return value === undefined ? null : JSON.parse(value)
-    } catch {
-      return null
+  persistStringArray: (key: string, value: string[]) => {
+    if (value.length === 0) {
+      storage.delete(key)
+    } else {
+      storage.set(key, JSON.stringify(value))
     }
   },
-  writeJson: (key: string, value: unknown) => {
-    if (value === null) {
+  persistStringRecord: (key: string, value: Record<string, string>) => {
+    if (Object.keys(value).length === 0) {
       storage.delete(key)
     } else {
       storage.set(key, JSON.stringify(value))
@@ -65,7 +64,37 @@ vi.mock('@/lib/storage', () => ({
 
     return value === undefined ? fallback : value === 'true'
   },
-  storedString: (key: string) => storage.get(key) ?? null
+  storedString: (key: string) => storage.get(key) ?? null,
+  storedStringArray: (key: string) => {
+    const value = storage.get(key)
+
+    if (!value) {
+      return []
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(value)
+
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+    } catch {
+      return []
+    }
+  },
+  storedStringRecord: (key: string) => {
+    const value = storage.get(key)
+
+    if (!value) {
+      return {}
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(value)
+
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
 }))
 
 const notifySpy = vi.fn()
@@ -93,6 +122,8 @@ const getActionStatusSpy = vi.fn()
 
 vi.mock('@/hermes', () => ({
   checkHermesUpdate: (...args: unknown[]) => checkHermesUpdateSpy(...args),
+  getProfiles: vi.fn(async () => []),
+  setApiRequestProfile: vi.fn(),
   updateHermes: (...args: unknown[]) => updateHermesSpy(...args),
   getActionStatus: (...args: unknown[]) => getActionStatusSpy(...args)
 }))

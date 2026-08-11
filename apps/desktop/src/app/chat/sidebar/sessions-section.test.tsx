@@ -232,7 +232,6 @@ describe('Sessions cron rows', () => {
         open
         pinned={false}
         sessions={[ownedSession('work', 'cron')]}
-        workingSessionIdSet={new Set()}
       />
     )
 
@@ -258,7 +257,6 @@ describe('Sessions cron rows', () => {
         open
         pinned={false}
         sessions={[ownedSession('work')]}
-        workingSessionIdSet={new Set()}
       />
     )
 
@@ -284,7 +282,6 @@ describe('Sessions cron rows', () => {
         open
         pinned={false}
         sessions={[ownedSession('work', 'cron')]}
-        workingSessionIdSet={new Set()}
       />
     )
 
