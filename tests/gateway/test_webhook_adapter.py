@@ -147,6 +147,7 @@ class TestValidateSignature:
         hostile = "ské-not-a-valid-signature"
         for header in (
             "X-Hub-Signature-256",
+            "X-Hook-Signature",
             "X-Gitlab-Token",
             "X-Webhook-Signature",
             "linear-signature",
@@ -175,6 +176,18 @@ class TestValidateSignature:
         req = _mock_request(headers={"linear-signature": sig})
 
         assert adapter._validate_signature(req, body, "real-secret") is False
+
+    def test_validate_missive_signature(self):
+        """Missive's X-Hook-Signature uses GitHub-style sha256=<HMAC>."""
+        adapter = _make_adapter()
+        body = b'{"conversation":{"id":"47a57b76-df42-4d8b-927f-80dbe5d87191"}}'
+        secret = "missive-validation-secret"
+        signature = _github_signature(body, secret)
+        req = _mock_request(headers={"X-Hook-Signature": signature})
+        assert adapter._validate_signature(req, body, secret) is True
+
+        bad_req = _mock_request(headers={"X-Hook-Signature": "sha256=bad"})
+        assert adapter._validate_signature(bad_req, body, secret) is False
 
 
     def test_non_ascii_svix_signature_rejected(self):
