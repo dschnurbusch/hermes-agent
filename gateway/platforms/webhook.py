@@ -627,11 +627,13 @@ class WebhookAdapter(BasePlatformAdapter):
         svix = [_header(name) for name in ("svix-id", "svix-timestamp", "svix-signature")]
         if any(svix):
             return _validate_svix_signature(body, secret, *svix)
-        # Linear (any header case): hex HMAC of the body. GitHub: sha256=<hex>. GitLab: plain token.
+        # Body-only signatures: Linear uses bare hex, GitHub and Missive use
+        # sha256=<hex>, and GitLab supplies the plain shared token.
         for provided, expected in (
                 (_header("linear-signature"), lambda: _hex_hmac(secret, body)),
-                (headers.get("X-Hub-Signature-256", ""), lambda: "sha256=" + _hex_hmac(secret, body)),
-                (headers.get("X-Gitlab-Token", ""), lambda: secret)):
+                (_header("X-Hub-Signature-256"), lambda: "sha256=" + _hex_hmac(secret, body)),
+                (_header("X-Hook-Signature"), lambda: "sha256=" + _hex_hmac(secret, body)),
+                (_header("X-Gitlab-Token"), lambda: secret)):
             if provided:
                 return _hmac_str_equal(provided, expected())
         route_name = request.match_info.get("route_name", "")
