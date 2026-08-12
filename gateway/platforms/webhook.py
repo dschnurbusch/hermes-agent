@@ -1062,6 +1062,15 @@ class WebhookAdapter(BasePlatformAdapter):
             ).hexdigest()
             return _hmac_str_equal(gh_sig, expected)
 
+        # Missive: X-Hook-Signature = sha256=<hex>
+        # https://missiveapp.com/docs/developers/webhooks
+        missive_sig = request.headers.get("X-Hook-Signature", "")
+        if missive_sig:
+            expected = "sha256=" + hmac.new(
+                secret.encode(), body, hashlib.sha256
+            ).hexdigest()
+            return _hmac_str_equal(missive_sig, expected)
+
         # GitLab: X-Gitlab-Token = <plain secret>
         gl_token = request.headers.get("X-Gitlab-Token", "")
         if gl_token:
