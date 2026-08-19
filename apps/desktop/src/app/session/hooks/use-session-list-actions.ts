@@ -9,8 +9,8 @@ import {
   MESSAGING_SESSION_SOURCE_IDS,
   normalizeSessionSource
 } from '@/lib/session-source'
-import { gatewayActivationEpoch } from '@/store/gateway'
 import { $cronJobsHiddenFromSessions, setCronJobInSessions } from '@/store/cron'
+import { gatewayActivationEpoch } from '@/store/gateway'
 import {
   $pinnedSessionIds,
   $sessionsLimit,

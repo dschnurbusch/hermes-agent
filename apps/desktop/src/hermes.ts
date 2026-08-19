@@ -193,6 +193,7 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
       excludeSources: req.messagingExclude
     })
   ])
+
   const errors = [...(recents.errors ?? []), ...(cron.errors ?? []), ...(messaging.errors ?? [])]
 
   return {
@@ -208,7 +209,9 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
 }
 
 export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<SidebarSessionsResponse> {
-  if (sidebarBatchEndpointMissing) return listSidebarSessionsLegacy(req)
+  if (sidebarBatchEndpointMissing) {
+    return listSidebarSessionsLegacy(req)
+  }
 
   const params = new URLSearchParams({
     recents_profile: req.recentsProfile,
@@ -217,9 +220,17 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
     messaging_limit: String(Math.max(1, req.messagingLimit))
   })
 
-  if (req.cronProfile) params.set('cron_profile', req.cronProfile)
-  if (req.recentsExclude.length) params.set('recents_exclude', req.recentsExclude.join(','))
-  if (req.messagingExclude.length) params.set('messaging_exclude', req.messagingExclude.join(','))
+  if (req.cronProfile) {
+    params.set('cron_profile', req.cronProfile)
+  }
+
+  if (req.recentsExclude.length) {
+    params.set('recents_exclude', req.recentsExclude.join(','))
+  }
+
+  if (req.messagingExclude.length) {
+    params.set('messaging_exclude', req.messagingExclude.join(','))
+  }
 
   let result: SidebarSessionsResponse
 
@@ -229,8 +240,12 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
       timeoutMs: 60_000
     })
   } catch (error) {
-    if (!isMissingRestEndpoint(error)) throw error
+    if (!isMissingRestEndpoint(error)) {
+      throw error
+    }
+
     sidebarBatchEndpointMissing = true
+
     return listSidebarSessionsLegacy(req)
   }
 
@@ -249,8 +264,13 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
 
 function cronJobPath(jobId: string, suffix = '', profile?: null | string): string {
   const query = new URLSearchParams()
-  if (profile) query.set('profile', profile)
+
+  if (profile) {
+    query.set('profile', profile)
+  }
+
   const separator = suffix.includes('?') ? '&' : '?'
+
   return `/api/cron/jobs/${encodeURIComponent(jobId)}${suffix}${query.size ? `${separator}${query}` : ''}`
 }
 
@@ -260,6 +280,7 @@ export async function getCronJobRuns(jobId: string, limit = 20, profile?: null |
     ...connectionScoped(),
     path: cronJobPath(jobId, `/runs?limit=${limit}`, profile)
   })
+
   return runs ?? []
 }
 
