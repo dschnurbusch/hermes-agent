@@ -13,6 +13,14 @@ import { $showAllProfiles, setShowAllProfiles } from './profile'
 import type { PullRequestBucket } from './pull-requests'
 import type { SessionStatusBucket } from './session-dot-state'
 
+export {
+  $sessionsLimit,
+  bumpSessionsLimit,
+  raiseSessionsLimit,
+  resetSessionsLimit,
+  SIDEBAR_SESSIONS_PAGE_SIZE
+} from './session-limit'
+
 export const SIDEBAR_DEFAULT_WIDTH = 237
 export const SIDEBAR_MAX_WIDTH = 360
 // Open at the same width as the sessions sidebar so the two rails match, but
@@ -22,7 +30,6 @@ export const FILE_BROWSER_DEFAULT_WIDTH = `${SIDEBAR_DEFAULT_WIDTH}px`
 export const FILE_BROWSER_MIN_WIDTH = '10rem'
 export const FILE_BROWSER_MAX_WIDTH = '20rem'
 
-export const SIDEBAR_SESSIONS_PAGE_SIZE = 50
 // How deep the list reaches once a filter is on. A filter that only searches
 // the loaded page answers the wrong question — "6 merged PRs" really meant "6
 // among the last 50 rows" — so narrowing the view widens the window it reads.
@@ -397,7 +404,6 @@ export const $sidebarViewCustomized: ReadableAtom<boolean> = computed(
 // preview rail move to the left — a mirror of the default layout.
 export const $panesFlipped = persistentAtom(PANES_FLIPPED_STORAGE_KEY, false, Codecs.bool)
 export const $isSidebarResizing = atom(false)
-export const $sessionsLimit = atom(SIDEBAR_SESSIONS_PAGE_SIZE)
 
 // Live date/status divider ids (`list-group:yesterday`, …) currently in the
 // recents list. Not persisted — the open/closed choice lives on
@@ -775,27 +781,4 @@ export function setPinnedSessionOrder(ids: string[]) {
   })
 
   setOrderIds($pinnedSessionIds, next)
-}
-
-export function bumpSessionsLimit(step: number = SIDEBAR_SESSIONS_PAGE_SIZE) {
-  const safeStep = Math.max(1, Math.floor(step))
-  $sessionsLimit.set($sessionsLimit.get() + safeStep)
-}
-
-/** Raise the window to at least `floor`, never shrinking it. Returns true when
- *  it moved, so the caller knows a refetch is worth it. */
-export function raiseSessionsLimit(floor: number): boolean {
-  if ($sessionsLimit.get() >= floor) {
-    return false
-  }
-
-  $sessionsLimit.set(floor)
-
-  return true
-}
-
-export function resetSessionsLimit() {
-  if ($sessionsLimit.get() !== SIDEBAR_SESSIONS_PAGE_SIZE) {
-    $sessionsLimit.set(SIDEBAR_SESSIONS_PAGE_SIZE)
-  }
 }

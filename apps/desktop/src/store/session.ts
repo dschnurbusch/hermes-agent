@@ -14,7 +14,7 @@ import { mergeSessionsForPresentation, visibleCronSessions } from '@/lib/cron-se
 import { persistBoolean, persistString, readJson, storedBoolean, storedString, writeJson } from '@/lib/storage'
 import { $cronJobsHiddenFromSessions } from '@/store/cron'
 import { syncCronModelImpactConnection } from '@/store/cron-model-impact-scope'
-import { $sessionsLimit } from '@/store/layout'
+import { $sessionsLimit } from '@/store/session-limit'
 import type { SessionInfo, UsageStats } from '@/types/hermes'
 
 import { isSessionRemovalPending } from './session-removal'
@@ -777,25 +777,14 @@ export const $cronSessions = atom<SessionInfo[]>([])
 export const CRON_SECTION_LIMIT = 50
 const $cronSessionsAcquisitionTruncated = atom<boolean>(false)
 
-// `layout` reaches the session tree through pane state during test/bootstrap
-// initialization. Keep the limit dependency lazy so this computed does not
-// capture an undefined live binding while that import cycle is still settling.
-const $sessionsLimitSource = {
-  get value() {
-    return $sessionsLimit.get()
-  },
-  get: () => $sessionsLimit.get(),
-  listen: (...args: Parameters<typeof $sessionsLimit.listen>) => $sessionsLimit.listen(...args)
-}
-
 // Hide is a Sessions-feed presentation preference. Raw cron rows remain in
 // $cronSessions so Pins and full-text Search keep their existing behavior.
 export const $cronSessionsInSessionList = computed(
-  [$cronSessions, $cronJobsHiddenFromSessions, $sessionsLimitSource],
+  [$cronSessions, $cronJobsHiddenFromSessions, $sessionsLimit],
   (rows, hiddenJobs, limit) => visibleCronSessions(rows, hiddenJobs).slice(0, limit)
 )
 export const $cronSessionsTruncated = computed(
-  [$cronSessions, $cronJobsHiddenFromSessions, $sessionsLimitSource, $cronSessionsAcquisitionTruncated],
+  [$cronSessions, $cronJobsHiddenFromSessions, $sessionsLimit, $cronSessionsAcquisitionTruncated],
   (rows, hiddenJobs, limit, acquisitionTruncated) =>
     acquisitionTruncated || visibleCronSessions(rows, hiddenJobs).length > limit
 )
