@@ -114,7 +114,6 @@ import {
   CRON_ROUTE,
   navigateToWorkspacePage,
   routeSessionId,
-  sessionProfileFromSearch,
   sessionRoute,
   SETTINGS_ROUTE,
   syncWorkspaceRoute
@@ -310,7 +309,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const boot = useStore($desktopBoot)
 
   const routedSessionId = routeSessionId(location.pathname)
-  const routedSessionProfile = sessionProfileFromSearch(location.search)
   const routedSessionIdRef = useRef(routedSessionId)
 
   routedSessionIdRef.current = routedSessionId
@@ -859,7 +857,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     freshDraftReady,
     gatewayState,
     locationPathname: location.pathname,
-    routedSessionProfile,
     resumeSession,
     resumeFailedSessionId,
     resumeExhaustedSessionId,
