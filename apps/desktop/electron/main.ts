@@ -218,6 +218,7 @@ import {
   resolveRequestedPathForIpc,
   resolveTimeoutMs,
   SAFE_STORAGE_ENCODING,
+  secureTokenStorageAvailable,
   TEXT_PREVIEW_SOURCE_MAX_BYTES,
   tightenSecretFileMode,
   writeSecretFileAtomic
@@ -9509,8 +9510,7 @@ function sanitizeRegistryConnection(entry) {
 function sanitizeConnectionsRegistry(registry = readDesktopConnectionsRegistry()) {
   // Same keyring signal the v1 sanitize exposes: lets the Connections panel
   // offer the plain-text opt-in on keyring-less Linux instead of failing.
-  // Policy-aware: never touches safeStorage while encryption is opted out.
-  const secureTokenStorage = probeSecureTokenStorage()
+  const secureTokenStorage = secureTokenStorageAvailable({ platform: process.platform, safeStorageApi: safeStorage })
 
   return {
     version: registry.version,
@@ -9717,10 +9717,9 @@ async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionCon
 
   // Whether the OS keyring (safeStorage) can encrypt the saved token. When
   // false the renderer knows to offer the plain-text opt-in in Settings →
-  // Gateway. With keychain encryption opted out (the default) this reports
-  // true WITHOUT touching safeStorage — probing is itself a keychain touch
-  // that raises the macOS password dialog (see probeSecureTokenStorage).
-  const secureTokenStorage = probeSecureTokenStorage()
+  // Gateway. safeStorage.isEncryptionAvailable can throw on some platforms, so
+  // treat any failure as "not available".
+  const secureTokenStorage = secureTokenStorageAvailable({ platform: process.platform, safeStorageApi: safeStorage })
 
   // Whether the currently saved token is stored in plain text (the keyring-less
   // opt-in path). The env override supplies its token from the environment, not

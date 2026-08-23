@@ -22,6 +22,7 @@ import {
   resolveTimeoutMs,
   SAFE_STORAGE_ENCODING,
   SECRET_FILE_MODE,
+  secureTokenStorageAvailable,
   sensitiveFileBlockReason,
   tightenSecretFileMode,
   writeSecretFileAtomic
@@ -199,6 +200,40 @@ test('encryptDesktopSecret returns null for an empty value even with the plain-t
       { allowPlainText: true }
     ),
     null
+  )
+})
+
+test('secureTokenStorageAvailable does not synchronously probe macOS Keychain or Windows DPAPI', () => {
+  let probes = 0
+
+  const safeStorageApi = {
+    isEncryptionAvailable: () => {
+      probes += 1
+
+      return true
+    }
+  }
+
+  assert.equal(secureTokenStorageAvailable({ platform: 'darwin', safeStorageApi }), true)
+  assert.equal(secureTokenStorageAvailable({ platform: 'win32', safeStorageApi }), true)
+  assert.equal(probes, 0)
+})
+
+test('secureTokenStorageAvailable probes Linux keyring availability and fails closed', () => {
+  assert.equal(
+    secureTokenStorageAvailable({ platform: 'linux', safeStorageApi: { isEncryptionAvailable: () => true } }),
+    true
+  )
+  assert.equal(
+    secureTokenStorageAvailable({
+      platform: 'linux',
+      safeStorageApi: {
+        isEncryptionAvailable: () => {
+          throw new Error('keyring unavailable')
+        }
+      }
+    }),
+    false
   )
 })
 

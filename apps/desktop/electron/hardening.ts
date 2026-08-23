@@ -235,6 +235,23 @@ function enableBasicPasswordStoreEncryption({ platform, passwordStoreSwitch, saf
   return false
 }
 
+// Renderer-facing capability hint. macOS Keychain and Windows DPAPI are the
+// platform-backed safeStorage implementations; synchronously probing them on
+// the Electron main thread can block startup while the OS credential service
+// waits. Linux availability genuinely varies by keyring/password-store, so only
+// that platform performs the live probe.
+function secureTokenStorageAvailable({ platform, safeStorageApi }: any = {}) {
+  if (platform === 'darwin' || platform === 'win32') {
+    return true
+  }
+
+  try {
+    return Boolean(safeStorageApi?.isEncryptionAvailable?.())
+  } catch {
+    return false
+  }
+}
+
 // The token-persistence seam shared by the connection-config save/apply IPC
 // path. Given the incoming edit, decide what token block to persist:
 //   - No incoming token: keep the existing block's token untouched (edits that
@@ -547,6 +564,7 @@ export {
   resolveTimeoutMs,
   SAFE_STORAGE_ENCODING,
   SECRET_FILE_MODE,
+  secureTokenStorageAvailable,
   sensitiveFileBlockReason,
   TEXT_PREVIEW_SOURCE_MAX_BYTES,
   tightenSecretFileMode,
