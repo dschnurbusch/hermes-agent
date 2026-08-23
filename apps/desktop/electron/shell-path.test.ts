@@ -137,6 +137,28 @@ test('ensureLoginShellPath is single-flight — concurrent callers share one she
   assert.equal(env.PATH, '/opt/homebrew/bin:/usr/bin')
 })
 
+test('applyLoginShellPath settles when the shell child exits without invoking its callback', async () => {
+  let kills = 0
+
+  const execFileFn = () => ({
+    kill() {
+      kills += 1
+    },
+    stdin: { end() {} }
+  })
+
+  const result = await applyLoginShellPath({
+    env: { PATH: '/usr/bin', SHELL: '/bin/zsh' },
+    execFileFn,
+    platform: 'darwin',
+    timeoutMs: 5
+  })
+
+  assert.equal(result.applied, false)
+  assert.equal(result.reason, 'unresolved')
+  assert.equal(kills, 2)
+})
+
 test('ensureLoginShellPath never rejects', async () => {
   const execFileFn = () => {
     throw new Error('spawn EACCES')

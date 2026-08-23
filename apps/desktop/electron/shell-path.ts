@@ -70,16 +70,28 @@ function mergeLoginShellPath(loginPath, currentPath, { delimiter = ':' }: any = 
 function runProbe(shell, flags, execFileFn, timeoutMs): Promise<string | null> {
   return new Promise(resolve => {
     let settled = false
+    let child: any = null
+    let timer: null | ReturnType<typeof setTimeout> = null
 
     const finish = value => {
       if (!settled) {
         settled = true
+
+        if (timer) {
+          clearTimeout(timer)
+        }
+
         resolve(value)
       }
     }
 
+    timer = setTimeout(() => {
+      child?.kill?.('SIGKILL')
+      finish(null)
+    }, timeoutMs + 250)
+
     try {
-      const child = execFileFn(
+      child = execFileFn(
         shell,
         [...flags, PROBE_COMMAND],
         { encoding: 'utf8', timeout: timeoutMs, windowsHide: true },
