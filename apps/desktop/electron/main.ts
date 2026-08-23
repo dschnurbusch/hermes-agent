@@ -12679,7 +12679,7 @@ async function runPoolBackendStart(
   assertPoolEntryStillOwned(poolKey, entry)
   const hermesCwd = resolveHermesCwd()
   const webDist = resolveWebDist()
-  const readyFile = backend.readyFile ? makeDashboardReadyFile() : null
+  const readyFile = makeDashboardReadyFile()
 
   // Guard BEFORE the "Starting" line: a profile that only exists on a remote
   // backend (remote-primary desktop asked for a forced-local child) rejects
@@ -13460,7 +13460,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
     backendConnectionState.assertCurrentAttempt(connectionAttempt)
     const hermesCwd = resolveHermesCwd()
     const webDist = resolveWebDist()
-    const readyFile = backend.readyFile ? makeDashboardReadyFile() : null
+    const readyFile = makeDashboardReadyFile()
 
     await advanceBootProgress('backend.spawn', `Starting Hermes backend via ${backend.label}`, 84)
     rememberLog(`Starting Hermes backend via ${backend.label}`)
