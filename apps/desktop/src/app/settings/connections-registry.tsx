@@ -73,7 +73,10 @@ function editorFromConnection(conn: DesktopRegistryConnection): EditorState {
     kind: conn.kind,
     label: conn.label,
     url: conn.url || '',
-    authMode: conn.authMode || 'token',
+    // Cloud instances are Portal/OAuth-backed. A stale pre-OAuth registry row
+    // must never make the editor silently save a Cloud connection as token
+    // auth, because Cloud has no session-token field to repair that state.
+    authMode: conn.kind === 'cloud' ? 'oauth' : conn.authMode || 'token',
     token: '',
     // Reconstruct the composite the single ssh host field displays. The save
     // payload sends ONLY this string (never separate user/port), because
@@ -93,7 +96,7 @@ function emptyEditor(kind: DesktopConnectionKind): EditorState {
     kind,
     label: '',
     url: '',
-    authMode: 'token',
+    authMode: kind === 'cloud' ? 'oauth' : 'token',
     token: '',
     host: '',
     keyPath: '',
@@ -272,8 +275,8 @@ export function ConnectionsRegistrySection() {
     setConnectionsRegistry(next)
   }, [])
 
-  const editorUrl = editor?.kind === 'remote' ? coerceRemoteUrlScheme(editor.url) : ''
-  const editorWantsOauth = editor?.kind === 'remote' && editor.authMode === 'oauth'
+  const editorUrl = editor?.kind === 'remote' || editor?.kind === 'cloud' ? coerceRemoteUrlScheme(editor.url) : ''
+  const editorWantsOauth = (editor?.kind === 'remote' || editor?.kind === 'cloud') && editor.authMode === 'oauth'
   const authProviderShape = deriveRemoteAuthProviderShape(authProbe?.providers, t.boot.failure.identityProvider)
 
   // Probe only while the sign-in row is on screen, and debounce it so typing a
@@ -423,7 +426,7 @@ export function ConnectionsRegistrySection() {
 
         if (editor.kind === 'remote' || editor.kind === 'cloud') {
           payload.url = editor.url
-          payload.authMode = editor.authMode
+          payload.authMode = editor.kind === 'cloud' ? 'oauth' : editor.authMode
 
           if (editor.token.trim()) {
             payload.token = editor.token.trim()
@@ -765,7 +768,7 @@ export function ConnectionsRegistrySection() {
                 key={kind}
                 onClick={() => {
                   setDupeError(null)
-                  setEditor({ ...editor, kind })
+                  setEditor({ ...editor, authMode: kind === 'cloud' ? 'oauth' : editor.authMode, kind })
                 }}
                 size="sm"
                 variant={editor.kind === kind ? 'default' : 'outline'}
@@ -808,26 +811,28 @@ export function ConnectionsRegistrySection() {
             />
           )}
 
-          {editor.kind === 'remote' && (
+          {(editor.kind === 'remote' || editor.kind === 'cloud') && (
             <>
-              <ListRow
-                action={
-                  <div className="flex gap-2">
-                    {(['token', 'oauth'] as const).map(mode => (
-                      <Button
-                        key={mode}
-                        onClick={() => setEditor({ ...editor, authMode: mode })}
-                        size="sm"
-                        variant={editor.authMode === mode ? 'default' : 'outline'}
-                      >
-                        {mode === 'token' ? t.settings.gateway.tokenTitle : 'OAuth'}
-                      </Button>
-                    ))}
-                  </div>
-                }
-                title={t.settings.gateway.authTitle}
-              />
-              {editor.authMode === 'token' && (
+              {editor.kind === 'remote' && (
+                <ListRow
+                  action={
+                    <div className="flex gap-2">
+                      {(['token', 'oauth'] as const).map(mode => (
+                        <Button
+                          key={mode}
+                          onClick={() => setEditor({ ...editor, authMode: mode })}
+                          size="sm"
+                          variant={editor.authMode === mode ? 'default' : 'outline'}
+                        >
+                          {mode === 'token' ? t.settings.gateway.tokenTitle : 'OAuth'}
+                        </Button>
+                      ))}
+                    </div>
+                  }
+                  title={t.settings.gateway.authTitle}
+                />
+              )}
+              {editor.kind === 'remote' && editor.authMode === 'token' && (
                 <ListRow
                   action={
                     <Input

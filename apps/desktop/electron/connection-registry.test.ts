@@ -1211,6 +1211,20 @@ test('remote input normalizes URL and auth mode; cloud keeps org', () => {
   assert.equal(cloud.kind, 'cloud')
   assert.equal(cloud.org, 'nous')
   assert.equal(cloud.authMode, 'oauth')
+
+  const staleCloud = normalizeConnectionInput(
+    {
+      kind: 'cloud',
+      label: 'Legacy Cloud',
+      url: 'https://legacy.hermes.cloud',
+      authMode: 'token',
+      token: { enc: 'must-not-survive' }
+    },
+    registry
+  )
+
+  assert.equal(staleCloud.authMode, 'oauth')
+  assert.equal(staleCloud.token, undefined)
 })
 
 test('ssh input requires a host; local input only carries the label', () => {
@@ -1307,6 +1321,28 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
   )
   assert.deepEqual(registry.connections[1].token, { v: 1 })
   assert.equal(registry.connections[3].port, 2222)
+})
+
+test('normalizeRegistry heals legacy Cloud token auth to OAuth and drops stale token material', () => {
+  const registry = normalizeRegistry({
+    version: 2,
+    primary: 'local',
+    connections: [
+      { id: 'local', kind: 'local', label: 'This device' },
+      {
+        id: 'legacy-cloud',
+        kind: 'cloud',
+        label: 'Legacy Cloud',
+        url: 'https://legacy.hermes.cloud',
+        authMode: 'token',
+        token: { enc: 'must-not-survive' }
+      }
+    ]
+  })
+  const cloud = registry.connections.find(connection => connection.id === 'legacy-cloud')
+
+  assert.equal(cloud?.authMode, 'oauth')
+  assert.equal(cloud?.token, undefined)
 })
 
 test('normalizeRegistry falls back to Primary when the last-used source is missing', () => {

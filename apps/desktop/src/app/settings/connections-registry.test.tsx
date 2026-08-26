@@ -297,6 +297,41 @@ describe('ConnectionsRegistrySection', () => {
 
     await waitFor(() => expect(test).toHaveBeenCalled())
   })
+
+  it('heals a stale Cloud token row to OAuth and saves it without asking for a session token', async () => {
+    const cloud = {
+      authMode: 'token' as const,
+      id: 'legacy-cloud',
+      kind: 'cloud' as const,
+      label: 'Legacy Cloud',
+      tokenPreview: null,
+      tokenSet: false,
+      url: 'https://legacy.hermes.cloud'
+    }
+    list.mockResolvedValueOnce({ ...registry, connections: [...registry.connections, cloud] })
+
+    render(<ConnectionsRegistrySection />)
+
+    await waitFor(() => expect(screen.getByText('Legacy Cloud')).toBeTruthy())
+    const editButton = screen.getAllByRole('button', { name: 'Edit' }).at(-1)
+
+    if (!editButton) {
+      throw new Error('Cloud edit button not found')
+    }
+
+    fireEvent.click(editButton)
+    expect(screen.queryByText('Session token')).toBeNull()
+    expect(screen.getByText('Authentication')).toBeTruthy()
+    fireEvent.click(screen.getByText('Save connection').closest('button')!)
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(save.mock.calls[0][0]).toMatchObject({
+      authMode: 'oauth',
+      id: 'legacy-cloud',
+      kind: 'cloud'
+    })
+    expect(save.mock.calls[0][0]).not.toHaveProperty('token')
+  })
 })
 
 describe('dedupe helpers', () => {

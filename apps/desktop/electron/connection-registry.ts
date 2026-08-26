@@ -926,7 +926,11 @@ export function normalizeConnectionInput(input: ConnectionInput, registry: Conne
       throw new Error(`A connection to this gateway URL already exists ("${urlDupe.label}").`)
     }
 
-    const authMode = normAuthMode(input.authMode)
+    // Hermes Cloud is discovered through Portal and authenticates with OAuth.
+    // Legacy/stale rows may say `token`, but there is no valid Cloud session
+    // token for the user to paste. Heal the invariant at the persistence
+    // boundary so every caller receives a dialable Cloud descriptor.
+    const authMode = kind === 'cloud' ? 'oauth' : normAuthMode(input.authMode)
     const entry: RegistryConnection = { id, kind, label, url, authMode }
 
     // A token is only meaningful for token-auth remotes. Dropping it here is
@@ -1163,9 +1167,9 @@ export function normalizeRegistry(raw: unknown): ConnectionRegistry {
         }
 
         clean.url = url
-        clean.authMode = normAuthMode(entry.authMode)
+        clean.authMode = kind === 'cloud' ? 'oauth' : normAuthMode(entry.authMode)
 
-        if (entry.token !== undefined) {
+        if (kind === 'remote' && clean.authMode === 'token' && entry.token !== undefined) {
           clean.token = entry.token
         }
 

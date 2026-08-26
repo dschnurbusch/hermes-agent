@@ -15331,7 +15331,9 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
     authMode = normAuthMode(local.authMode)
   } else {
     baseUrl = normalizeRemoteBaseUrl(entry.url)
-    authMode = normAuthMode(entry.authMode)
+    // Cloud entries are always Portal/OAuth-backed. Keep Test fail-safe even
+    // if a stale in-memory or hand-edited registry object still says `token`.
+    authMode = entry.kind === 'cloud' ? 'oauth' : normAuthMode(entry.authMode)
     testHeaders = decryptRemoteHeaders(entry.headers)
 
     if (authMode !== 'oauth') {
