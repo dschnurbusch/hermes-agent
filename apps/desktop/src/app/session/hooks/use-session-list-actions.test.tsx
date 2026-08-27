@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionInfo, SidebarSessionsResponse } from '@/hermes'
 import { cronJobVisibilityKey } from '@/lib/cron-session-visibility'
 import { $cronJobs, $cronJobsHiddenFromSessions, setCronJobs } from '@/store/cron'
-import { $sessionsLimit, resetSessionsLimit, SIDEBAR_SESSIONS_PAGE_SIZE } from '@/store/layout'
 import {
   beginGatewaySwitch,
   endGatewaySwitch,
   recoverActiveSourceAfterFailedGatewaySwitch,
   registerGatewaySwitchLifecycle
 } from '@/store/gateway-switch'
+import { $sessionsLimit, resetSessionsLimit, SIDEBAR_SESSIONS_PAGE_SIZE } from '@/store/layout'
 import {
   $cronSessions,
   $cronSessionsInSessionList,

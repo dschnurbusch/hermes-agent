@@ -237,10 +237,13 @@ describe('Sessions cron rows', () => {
 
     fireEvent.click(screen.getByTestId('session-work-same'))
 
-    expect(onResumeSession).toHaveBeenCalledWith('same', 'work')
+    expect(onResumeSession).toHaveBeenCalledWith(
+      'same',
+      expect.objectContaining({ profile: 'work', source: 'cron' })
+    )
   })
 
-  it('leaves ordinary row resume behavior profile-agnostic', () => {
+  it('opens an ordinary row with its exact profiled owner', () => {
     const onResumeSession = vi.fn()
 
     render(
@@ -262,7 +265,10 @@ describe('Sessions cron rows', () => {
 
     fireEvent.click(screen.getByTestId('session-work-same'))
 
-    expect(onResumeSession).toHaveBeenCalledWith('same', undefined)
+    expect(onResumeSession).toHaveBeenCalledWith(
+      'same',
+      expect.objectContaining({ profile: 'work', source: 'desktop' })
+    )
   })
 
   it('provides archive for a cron row and preserves its owner', () => {

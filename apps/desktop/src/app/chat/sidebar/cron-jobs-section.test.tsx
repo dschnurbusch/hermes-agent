@@ -86,6 +86,9 @@ describe('Sidebar Cron Jobs Sessions action', () => {
     fireEvent.click(await screen.findByRole('button', { name: '—' }))
 
     expect(getCronJobRuns).toHaveBeenCalledWith('daily', 5, 'work')
-    expect(onOpenRun).toHaveBeenCalledWith('cron_daily_1', 'work')
+    expect(onOpenRun).toHaveBeenCalledWith(
+      'cron_daily_1',
+      expect.objectContaining({ id: 'cron_daily_1', profile: 'work' })
+    )
   })
 })
