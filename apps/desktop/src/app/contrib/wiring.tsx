@@ -1017,7 +1017,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     // ambient/id-only path. Clear any stale explicit hint first: older builds
     // incorrectly persisted those rows as `local`, which made a remote session
     // click switch to the Mac backend and fail with "session not found".
-    onResumeSession: (sessionId, session) => {
+    onResumeSession: (sessionId, sessionOrProfile) => {
+      const session = typeof sessionOrProfile === 'string' ? undefined : sessionOrProfile
       const ownerRoute = sessionOwnerRouteFromRow(session)
 
       if (ownerRoute) {

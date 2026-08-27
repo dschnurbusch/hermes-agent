@@ -205,10 +205,10 @@ describe('Hermes REST helpers', () => {
     expect(api).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionId: 'cubi',
-        profile: 'default',
         path: expect.stringContaining('/api/profiles/sessions/sidebar?recents_profile=default')
       })
     )
+    expect(api.mock.calls[0][0]).not.toHaveProperty('profile')
   })
 
   it('routes legacy profile-session slices through the active backend scope', async () => {

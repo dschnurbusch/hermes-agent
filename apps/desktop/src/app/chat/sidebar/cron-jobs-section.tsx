@@ -72,7 +72,7 @@ interface SidebarCronJobsSectionProps {
   label: string
   max?: number
   // Open a run session's chat (1 click to output).
-  onOpenRun: (sessionId: string, profile?: string) => void
+  onOpenRun: (sessionId: string, session?: SessionInfo) => void
   // Open the full Cron page focused on this job (manage / full history).
   onManageJob: (jobId: string, profile?: null | string) => void
   onSetSessionsVisibility: (jobId: string, profile: null | string | undefined, shown: boolean) => Promise<void> | void
@@ -253,7 +253,7 @@ function CronJobSidebarRow({
   job: CronJob
   nowMs: number
   onManage: () => void
-  onOpenRun: (sessionId: string, profile?: string) => void
+  onOpenRun: (sessionId: string, session?: SessionInfo) => void
   onTogglePeek: () => void
   onToggleSessions: () => void
   onTrigger: () => void
@@ -428,7 +428,7 @@ function CronJobSidebarRuns({
   profile
 }: {
   jobId: string
-  onOpenRun: (sessionId: string, profile?: string) => void
+  onOpenRun: (sessionId: string, session?: SessionInfo) => void
   profile?: null | string
 }) {
   const { t } = useI18n()
@@ -501,7 +501,7 @@ function CronJobSidebarRuns({
                   : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
               )}
               key={run.id}
-              onClick={() => onOpenRun(run.id, profile ?? undefined)}
+              onClick={() => onOpenRun(run.id, run)}
               type="button"
             >
               {formatRunTime(run.last_active || run.started_at)}
