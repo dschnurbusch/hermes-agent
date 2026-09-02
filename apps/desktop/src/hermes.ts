@@ -144,6 +144,9 @@ export interface SidebarSessionSlice {
   sessions: SessionInfo[]
   profiles_truncated?: Record<string, boolean>
   profiles_usage?: Record<string, { cost_usd: number; tokens: number }>
+  /** Profiles whose scan for this slice failed. Mirrors the current
+   * api/sessions contract so refreshes can preserve that slice's stale rows. */
+  errors?: Array<{ profile: string; error: string }>
 }
 
 export interface SidebarSessionsResponse {
@@ -194,17 +197,25 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
     })
   ])
 
-  const errors = [...(recents.errors ?? []), ...(cron.errors ?? []), ...(messaging.errors ?? [])]
+  const recentsErrors = recents.errors ?? []
+  const cronErrors = cron.errors ?? []
+  const messagingErrors = messaging.errors ?? []
 
   return {
     capabilities: { cron_profile: true },
     recents: {
       profiles_truncated: profilesTruncatedFrom(recents.sessions, req.recentsLimit),
-      sessions: recents.sessions
+      sessions: recents.sessions,
+      ...(recentsErrors.length ? { errors: recentsErrors } : {})
     },
-    cron: { sessions: cron.sessions },
-    messaging: { sessions: messaging.sessions },
-    ...(errors.length ? { errors } : {})
+    cron: {
+      sessions: cron.sessions,
+      ...(cronErrors.length ? { errors: cronErrors } : {})
+    },
+    messaging: {
+      sessions: messaging.sessions,
+      ...(messagingErrors.length ? { errors: messagingErrors } : {})
+    }
   }
 }
 
@@ -255,9 +266,21 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
 
   return {
     capabilities: result.capabilities,
-    recents: { ...result.recents, sessions: result.recents?.sessions ?? [] },
-    cron: { ...result.cron, sessions: result.cron?.sessions ?? [] },
-    messaging: { ...result.messaging, sessions: result.messaging?.sessions ?? [] },
+    recents: {
+      ...result.recents,
+      sessions: result.recents?.sessions ?? [],
+      ...(result.errors?.length ? { errors: result.errors } : {})
+    },
+    cron: {
+      ...result.cron,
+      sessions: result.cron?.sessions ?? [],
+      ...(result.errors?.length ? { errors: result.errors } : {})
+    },
+    messaging: {
+      ...result.messaging,
+      sessions: result.messaging?.sessions ?? [],
+      ...(result.errors?.length ? { errors: result.errors } : {})
+    },
     errors: result.errors
   }
 }
