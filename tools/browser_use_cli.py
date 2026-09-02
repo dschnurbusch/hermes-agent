@@ -457,14 +457,12 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
     if provider is None:
         return _resolve_local_engine_cdp(env, task_id, session_name)
 
-    # Browser Use direct-API configs: the CLI talks to BU cloud natively (BU_AUTOSPAWN / auth login) — the
-    # legacy provider would create a second, redundant session. Nous-gateway configs (cloud_provider: nous
-    # from the picker, or the pre-picker use_gateway: true) DO resolve through the provider: the gateway
-    # provisions the browser server-side and returns its CDP URL.
-    provider_key = str(getattr(provider, "name", "") or "").strip().lower()
-    if provider_key == _BACKEND_KEY and not _use_gateway(_read_browser_cfg()):
-        env[_PRIVATE_BROWSER_SENTINEL] = "1"  # named BU cloud browsers are exclusive to their daemon
-        return None
+    # Always resolve a configured provider to an explicit CDP endpoint,
+    # including direct-API Browser Use accounts. Leaving direct accounts to
+    # BU_AUTOSPAWN lets Browser Harness prefer any local Chrome listening on
+    # 9222/9223, silently defeating ``cloud_provider: browser-use``. Explicit
+    # provider resolution makes the configured cloud route fail closed and
+    # reuses Hermes's existing session cache and cleanup lifecycle.
 
     provider_name = type(provider).__name__
     err = _export_session_cdp(
