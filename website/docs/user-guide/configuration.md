@@ -2565,16 +2565,19 @@ Control how Hermes handles potentially dangerous commands:
 
 ```yaml
 approvals:
-  mode: smart   # smart | manual | off
+  mode: smart                  # smart | manual | off
+  smart_human_fallback: prompt # prompt | deny
 ```
 
 | Mode | Behavior |
 |------|----------|
-| `smart` (default) | Use an auxiliary LLM to assess whether a flagged command is actually dangerous. Low-risk commands are auto-approved for that command only. Genuinely risky commands are denied; uncertain decisions escalate to the user. |
+| `smart` (default) | Use an auxiliary LLM to assess whether a flagged command is actually dangerous. Low-risk commands are auto-approved for that command only. Non-approvals follow `approvals.smart_human_fallback`. |
 | `manual` | Prompt the user before executing any flagged command. In the CLI, shows an interactive approval dialog. In messaging, queues a pending approval request. |
 | `off` | Skip all approval checks. Equivalent to `HERMES_YOLO_MODE=true`. **Use with caution.** |
 
 Smart mode is particularly useful for reducing approval fatigue — it lets the agent work more autonomously on safe operations while still catching genuinely destructive commands.
+
+`approvals.smart_human_fallback` controls what happens when the Smart reviewer does not approve a flagged command. The default, `prompt`, preserves the interactive owner-override flow. Set it to `deny` to turn reviewer `DENY` or `ESCALATE` verdicts, malformed responses, and provider failures into internal fail-closed blocks instead of technical prompts. The agent receives the block reason and should find a safer bounded route. This does not bypass deterministic hardline blocks, user-defined deny rules, or separate business-consent gates.
 
 :::warning
 Setting `approvals.mode: off` disables all safety checks for terminal commands. Only use this in trusted, sandboxed environments.
@@ -2582,7 +2585,7 @@ Setting `approvals.mode: off` disables all safety checks for terminal commands. 
 
 ### Denial circuit breaker
 
-`approvals.denial_breaker_threshold` (default `3`) guards against the agent retrying variations of a command the smart-approval reviewer keeps denying — each retry burns another guardian LLM call. After that many consecutive denials in a session, the deny message escalates to a hard-stop instruction telling the agent to stop, report the blocked operation, and ask you to run it manually or `/approve`. Any approval resets the count; set `0` to disable:
+`approvals.denial_breaker_threshold` (default `3`) guards against the agent retrying variations of a command the smart-approval reviewer keeps denying — each retry burns another guardian LLM call. After that many consecutive denials in a session, the deny message escalates to a hard-stop instruction. With `smart_human_fallback: prompt`, it may tell the agent to report the operation and request a manual run or `/approve`; with `smart_human_fallback: deny`, it tells the agent to report the block without requesting technical approval and to use a safer bounded route if one exists. Any approval resets the count; set `0` to disable:
 
 ```yaml
 approvals:

@@ -1488,6 +1488,7 @@ DEFAULT_CONFIG = {
     },
     # Approvals for dangerous commands.
     # mode: manual (always prompt) | smart (aux LLM auto-approves low-risk) | off (= --yolo)
+    # smart_human_fallback: prompt (owner override) | deny (fail closed internally)
     # cron_mode / single_query_mode / unattended_mode: deny | approve — what to do when a
     #   cron job, a -q session (HERMES_INTERACTIVE=1 but nobody to answer), or an unattended
     #   platform (webhook, msgraph_webhook, api_server; no /approve channel) hits one.
@@ -1510,6 +1511,7 @@ DEFAULT_CONFIG = {
         # notification the user may not see immediately — 60s proved too tight on Telegram/Discord (the
         # prompt expired before the user reached their phone), so the default is 300.
         "mode": "smart",
+        "smart_human_fallback": "prompt",
         "timeout": 300,
         "cron_mode": "deny",
         "single_query_mode": "deny",

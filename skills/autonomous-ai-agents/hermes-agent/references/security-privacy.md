@@ -30,12 +30,13 @@ hermes config set privacy.redact_pii false   # disable (default)
 
 By default (`approvals.mode: smart`), Hermes asks an auxiliary LLM to assess shell commands flagged as destructive (`rm -rf`, `git reset --hard`, etc.). The modes are:
 
-- `smart` — auto-approve a low-risk command once, deny high-risk commands, and prompt when uncertain (default)
+- `smart` — auto-approve a low-risk command once; other outcomes follow `approvals.smart_human_fallback` and prompt by default
 - `manual` — always prompt
 - `off` — skip all approval prompts (equivalent to `--yolo`)
 
 ```bash
 hermes config set approvals.mode smart       # recommended middle ground
+hermes config set approvals.smart_human_fallback deny  # fail closed; no technical prompt
 hermes config set approvals.mode off         # bypass everything (not recommended)
 ```
 

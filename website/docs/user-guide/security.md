@@ -23,7 +23,7 @@ The security model has eight layers:
 
 ## Dangerous Command Approval
 
-Before executing any command, Hermes checks it against a curated list of dangerous patterns. If a match is found, the user must explicitly approve it.
+Before executing any command, Hermes checks it against a curated list of dangerous patterns. A match enters the configured approval policy: Smart mode may approve it automatically, prompt the interactive owner, or fail closed internally.
 
 ### Approval Modes
 
@@ -32,6 +32,7 @@ The approval system supports three modes, configured via `approvals.mode` in `~/
 ```yaml
 approvals:
   mode: smart                     # smart | manual | off
+  smart_human_fallback: prompt    # prompt | deny — interactive Smart non-approvals
   timeout: 300                    # seconds to wait for user response (default: 300)
   cron_mode: deny                 # deny | approve — what cron jobs do when they hit a dangerous command
   single_query_mode: deny         # deny | approve — what single-query (-q) sessions do on a dangerous command
@@ -45,6 +46,7 @@ The full set of keys:
 | Key | Default | What it controls |
 |---|---|---|
 | `mode` | `smart` | Approval policy for dangerous shell commands — see the table below. |
+| `smart_human_fallback` | `prompt` | In Smart mode, whether `DENY`, `ESCALATE`, malformed reviewer output, or reviewer failure opens an interactive technical prompt (`prompt`) or fails closed internally (`deny`). |
 | `timeout` | `300` | Seconds Hermes waits for an approval reply before timing out. |
 | `cron_mode` | `deny` | How [cron jobs](./features/cron.md) behave headlessly when they trigger a dangerous-command prompt. `deny` blocks the command (the agent must find another path); `approve` auto-approves everything in cron context. |
 | `single_query_mode` | `deny` | How one-shot [`hermes chat -q`](./cli.md) sessions behave when they trigger a dangerous-command prompt. A `-q` session runs a single turn and exits with no user waiting to answer prompts; `deny` blocks the command (the agent must find another path), `approve` auto-approves everything in single-query context. Mirrors `cron_mode`. |
@@ -54,7 +56,7 @@ The full set of keys:
 
 | Mode | Behavior |
 |------|----------|
-| **smart** (default) | Use an auxiliary LLM to assess risk. Low-risk commands (e.g., `python -c "print('hello')"`) are auto-approved for that command only. Genuinely dangerous commands are auto-denied. Uncertain cases escalate to a manual prompt. |
+| **smart** (default) | Use an auxiliary LLM to assess risk. Low-risk commands (e.g., `python -c "print('hello')"`) are auto-approved for that command only. Other outcomes follow `smart_human_fallback`: prompt the interactive owner by default, or fail closed internally when set to `deny`. |
 | **manual** | Always prompt the user for approval on dangerous commands. |
 | **off** | Disable all approval checks — equivalent to running with `--yolo`. All commands execute without prompts. |
 

@@ -88,9 +88,17 @@ def _reset_denials(session_key: str) -> None:
         _denial_tally.pop(session_key, None)
 
 
-def _denial_breaker_addendum(session_key: str) -> str:
-    """Escalated hard-stop text once the breaker has tripped, else ''. Read-only: callers
-    increment via :func:`_record_denial`; the text is appended verbatim to the deny message."""
+def _denial_breaker_addendum(
+    session_key: str, *, allow_human_override: bool = True
+) -> str:
+    """Return the escalated hard-stop text when the breaker has tripped.
+
+    Read-only: callers increment via :func:`_record_denial` on the guardian
+    DENY verdict; this just checks the session's tally against the
+    configured threshold. Returns '' below the threshold (or when
+    disabled), otherwise a leading-space addendum the caller appends
+    verbatim to the deny message returned to the model.
+    """
     with _lock:
         count = _denial_tally.get(session_key, 0)
     threshold = _get_denial_breaker_threshold()
@@ -102,10 +110,18 @@ def _denial_breaker_addendum(session_key: str) -> str:
         "Smart-approval circuit breaker tripped for session %s: %d consecutive denials (threshold %d)",
         session_key, count, threshold,
     )
+    if allow_human_override:
+        return (
+            f" CIRCUIT BREAKER: {count} consecutive commands were blocked by "
+            "the security reviewer. STOP attempting variations of this "
+            "operation. Report the blocked operation to the user and either "
+            "ask them to run it manually or use /approve."
+        )
     return (
         f" CIRCUIT BREAKER: {count} consecutive commands were blocked by "
-        "the security reviewer. STOP attempting variations of this "
-        "operation. Report the blocked operation to the user and either ask them to run it manually or use /approve."
+        "the security reviewer. STOP attempting variations of this operation. "
+        "Report the blocked operation, but do not request technical approval; "
+        "use a safer bounded route if one exists."
     )
 
 # --- Gateway approval queue (the blocking wait loop lives in approval_gateway_wait) ---------------------------------
@@ -351,6 +367,28 @@ def save_permanent_allowlist(patterns: set):
 
 
 # --- Bypass check (yolo / mode=off) ---------------------------------------------------------------------------------
+
+def _get_smart_human_fallback() -> str:
+    """Return how interactive Smart non-approvals are handled.
+
+    ``prompt`` preserves the historical owner-override flow. ``deny`` keeps
+    the guardian decision internal: DENY, ESCALATE, malformed output, and
+    reviewer failure all fail closed without opening a technical approval
+    prompt. Deterministic hardline and user-deny rules run before this policy.
+    """
+    value = str(
+        approval_context._get_approval_config().get("smart_human_fallback", "prompt")
+    ).strip().lower()
+    if value in {"deny", "block", "fail_closed", "fail-closed"}:
+        return "deny"
+    if value not in {"prompt", "ask", "manual", "escalate"}:
+        logger.warning(
+            "Unknown approvals.smart_human_fallback %r — defaulting to 'prompt'. "
+            "Valid values: prompt, deny",
+            value,
+        )
+    return "prompt"
+
 
 def is_approval_bypass_active_for_session(session_key: str) -> bool:
     """Canonical three-source bypass check: process ``--yolo`` (frozen at import), the
@@ -625,6 +663,17 @@ def _smart_gate(spec: _GateSpec, command: str, description: str, pattern_key: st
         _reset_denials(session_key)
         logger.debug(spec.smart_log.format(command=command[:60], description=description, session_key=session_key))
         return {"approved": True, "message": None, "smart_approved": True, "description": description}, False
+    if _get_smart_human_fallback() == "deny":
+        _record_denial(session_key)
+        assessment = ("assessed as genuinely dangerous" if verdict == "deny"
+                      else "not approved because the reviewer was uncertain or unavailable")
+        return _denied(
+            f"BLOCKED by smart approval: {description}. The command was {assessment}. "
+            "Find a safer bounded route; do not ask the user to approve this technical command."
+            f"{_denial_breaker_addendum(session_key, allow_human_override=False)}",
+            pattern_key=pattern_key, description=description, outcome="denied",
+            smart_verdict=verdict,
+        ), False
     if verdict != "deny":
         return None, False
     _record_denial(session_key)

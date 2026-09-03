@@ -14,7 +14,7 @@ Short answer: the defaults already do most of the work. Hermes ships secure-by-d
 
 Fresh install, no configuration — these protections are active:
 
-**Dangerous commands require approval.** Before executing any command, Hermes checks it against a curated list of dangerous patterns — recursive deletes, writes to `/etc/`, disk operations, pipe-to-shell, and more. The default `approvals.mode: smart` uses an auxiliary LLM to assess risk: low-risk commands are auto-approved for that command only, genuinely dangerous commands are auto-denied, and uncertain cases escalate to a manual prompt.
+**Dangerous commands are reviewed.** Before executing any command, Hermes checks it against a curated list of dangerous patterns — recursive deletes, writes to `/etc/`, disk operations, pipe-to-shell, and more. The default `approvals.mode: smart` uses an auxiliary LLM to assess risk: low-risk commands are auto-approved for that command only, while other outcomes follow `approvals.smart_human_fallback` and prompt the interactive owner by default. Set that fallback to `deny` to fail closed internally instead.
 
 **Approval prompts fail closed.** If you don't respond to an approval prompt within the timeout (default 300 seconds), the command is **denied**. Walking away from your desk never silently approves anything.
 
