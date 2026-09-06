@@ -555,7 +555,4 @@ class MCPServerRunMixin:
         for tool_name in list(getattr(self, "_registered_tool_names", [])):
             _registration._deregister_mcp_tool_all_scopes(self, tool_name)
         self._registered_tool_names = []
-        skills_home = getattr(self, "_skills_home", None)
-        if skills_home:
-            from tools.mcp_skills_registry import drop_live_catalog
-            drop_live_catalog(skills_home, getattr(self, "name", ""))
+        getattr(self, "_revoke_skills_readiness")()
