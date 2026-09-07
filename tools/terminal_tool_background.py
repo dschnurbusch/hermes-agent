@@ -49,7 +49,7 @@ _HOMEBREW_CI_POLLER_HINT = (
 _ASYNC_UNSUPPORTED_NOTE = (
     'notify_on_complete / watch_patterns are not available in this session — it cannot receive '
     'an async completion after the turn ends (a one-shot runner such as `hermes -z`, a cron '
-    'job, a Kanban worker, or a stateless HTTP endpoint). The process is running in the '
+    'job, a delegated child, a Kanban worker, or a stateless HTTP endpoint). The process is running in the '
     "background; retrieve its result with process(action='poll') or process(action='wait')."
 )
 
@@ -103,7 +103,12 @@ def _apply_async_support(proc_session, result_data, notify_on_complete, watch_pa
         return notify_on_complete, watch_patterns
     from gateway.session_context import async_delivery_supported, get_session_env
 
-    if async_delivery_supported():
+    from agent.delegation_context import is_delegated_child_process_context
+
+    # Children inherit chat metadata, but their transcript is not a chat route.
+    # A process completion must remain with the child, which reports to its parent
+    # through the delegation result rather than starting another gateway turn.
+    if async_delivery_supported() and not is_delegated_child_process_context():
         _stamp_gateway_routing(proc_session, get_session_env)
         return notify_on_complete, watch_patterns
     result_data["notify_on_complete"] = False

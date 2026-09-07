@@ -909,6 +909,15 @@ class GatewaySessionCommandsMixin:
         current_entry = await self.async_session_store.get_or_create_session(source)
         if current_entry.session_id == target_id:
             return t("gateway.resume.already_on", name=name)
+        from gateway.session import is_internal_subagent_row
+        if self._session_db:
+            try:
+                target_row = await self._session_db.get_session(target_id)
+            except Exception:
+                logger.warning("Resume target ownership lookup failed", exc_info=True)
+                return t("gateway.resume.switch_failed")
+            if is_internal_subagent_row(target_row):
+                return t("gateway.resume.blocked_subagent", name=name)
         self._release_running_agent_state(session_key)
         new_entry = await self.async_session_store.switch_session(session_key, target_id)
         if not new_entry:

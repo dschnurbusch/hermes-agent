@@ -190,6 +190,12 @@ class GatewayNotificationsMixin:
                 "dropping injection (#55578 fail-closed).", pinned_session_id,
             )
             return None
+        if pinned_row.get("source") == "subagent":
+            logger.warning(
+                "Background completion targets child transcript %s; dropping injection.",
+                pinned_session_id,
+            )
+            return None
         target_session_id = pinned_session_id
         follows_compression = False
         if pinned_row.get("ended_at"):

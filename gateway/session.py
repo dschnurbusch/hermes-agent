@@ -682,6 +682,33 @@ def build_session_key(
     return ":".join(str(part) for part in parts)
 
 
+def is_internal_subagent_row(row: Optional[Dict[str, Any]]) -> bool:
+    """True when a sessions row is a delegate/subagent execution transcript.
+
+    Subagent sessions are internal execution records, never conversations a
+    human can address: ``delegate_tool`` creates them with
+    ``platform="subagent"`` and stamps the durable
+    ``model_config._delegate_from`` marker (#92859). Either signal alone is
+    enough — the marker survives a later ``record_gateway_session_peer``
+    overwriting ``source`` with the platform name, which is exactly what a
+    hijacked child row looks like after the fact.
+    """
+    if not row:
+        return False
+    if str(row.get("source") or "") == "subagent":
+        return True
+    raw = row.get("model_config")
+    if not raw:
+        return False
+    try:
+        cfg = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    return bool(str(cfg.get("_delegate_from") or "").strip())
+
+
 class _SessionFlight:
     def __init__(self) -> None:
         self.event = threading.Event()
@@ -1112,6 +1139,16 @@ class SessionStore(
     def switch_session(self, session_key: str, target_session_id: str) -> Optional[SessionEntry]:
         """Point a session key at an existing session ID (``/resume``): ends the current row and
         reopens the target so resume matches the CLI."""
+        db = self._db_for_key(session_key)
+        if db is not None:
+            try:
+                target = db.get_session(target_session_id)
+            except Exception:
+                logger.warning("Refusing route switch: target ownership lookup failed", exc_info=True)
+                return None
+            if is_internal_subagent_row(target):
+                logger.warning("Refusing route switch into internal subagent session %s", target_session_id)
+                return None
         with self._lock:
             old_entry = self._entry_locked(session_key)
             if old_entry is None:

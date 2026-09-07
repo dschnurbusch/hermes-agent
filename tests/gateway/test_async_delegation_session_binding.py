@@ -100,6 +100,17 @@ class TestGatewayPinningFailsClosed:
 
 
     @pytest.mark.asyncio
+    async def test_child_transcript_cannot_become_chat_route(self):
+        current = self._entry("parent")
+        runner = self._make_runner(
+            {"child": {"id": "child", "source": "subagent",
+                       "parent_session_id": "parent", "ended_at": None}},
+            switched_entry=self._entry("child"),
+        )
+        assert await runner._resolve_async_delegation_session(current, "child") is None
+        self._assert_no_route_change(runner)
+
+    @pytest.mark.asyncio
     async def test_live_spawning_session_rebinds_from_different_route(self):
         current = self._entry("sess_current")
         pinned = self._entry("sess_live")
