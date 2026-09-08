@@ -104,11 +104,19 @@ def _apply_async_support(proc_session, result_data, notify_on_complete, watch_pa
         return notify_on_complete, watch_patterns
     from gateway.session_context import async_delivery_supported, get_session_env
 
-    from agent.delegation_context import is_delegated_child_process_context
+    from agent.delegation_context import (
+        is_delegated_child_context, is_delegated_child_process_context,
+    )
 
-    # Children inherit chat metadata, but their transcript is not a chat route.
-    # A process completion must remain with the child, which reports to its parent
-    # through the delegation result rather than starting another gateway turn.
+    if async_delivery_supported() and is_delegated_child_context():
+        # Keep the child-owned completion in the registry so upstream's explicit
+        # handoff can transfer it. Never install an inherited chat watcher:
+        # untransferred child completions stay suppressed by owner_task_id.
+        result_data["notify_on_complete"] = False
+        result_data["subagent_note"] = _SUBAGENT_NOTIFY_NOTE
+        return notify_on_complete, None
+    # A subprocess carrying only the child marker cannot use the in-process
+    # handoff registry. It must not acquire the spawning conversation's route.
     if async_delivery_supported() and not is_delegated_child_process_context():
         _stamp_gateway_routing(proc_session, get_session_env)
         return notify_on_complete, watch_patterns
