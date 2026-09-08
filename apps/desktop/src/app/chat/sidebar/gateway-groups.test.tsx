@@ -7,7 +7,7 @@ import { SidebarProvider } from '@/components/ui/sidebar'
 import { $connectionsRegistry } from '@/store/connection-registry-state'
 import { $sidebarRowMeta, setSidebarGrouping } from '@/store/layout'
 import { $newChatRoute, $profiles } from '@/store/profile'
-import { $sessionProfilesUsage, $sessions } from '@/store/session'
+import { $cronSessions, $sessionProfilesUsage, $sessions } from '@/store/session'
 import { makeSessionInfo } from '@/test/session-info'
 
 import { ChatSidebar } from './index'
@@ -30,6 +30,7 @@ const mount = () =>
           onNewSessionInWorkspace={noop}
           onNewSessionSplit={noop}
           onResumeSession={resume}
+          onSetCronJobSessionsVisibility={noop}
           onTriggerCronJob={async () => {}}
         />
       </SidebarProvider>
@@ -94,6 +95,22 @@ it('keeps equal profile names on separate gateways and routes section creation a
         last_active: Date.now() / 1000
       })
     ])
+  )
+  act(() =>
+    $cronSessions.set([
+      makeSessionInfo({
+        id: 'cron_daily_1',
+        source: 'cron',
+        profile: 'work',
+        connection_id: 'remote-1',
+        title: 'Owned cron run'
+      })
+    ])
+  )
+  fireEvent.click(screen.getByText('Owned cron run'))
+  expect(resume).toHaveBeenLastCalledWith(
+    'cron_daily_1',
+    expect.objectContaining({ connection_id: 'remote-1', profile: 'work' })
   )
   const gateway = screen.getByText('Homelab').closest('[data-gateway-section]') as HTMLElement
   expect(within(gateway).getByText('default')).toBeTruthy()

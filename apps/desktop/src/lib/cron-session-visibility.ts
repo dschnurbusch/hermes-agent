@@ -74,7 +74,11 @@ export function mergeSessionsForPresentation(
 
   return [...ordinary, ...cron]
     .filter(session => {
-      const key = JSON.stringify([normalizeVisibilityProfile(session.profile), session._lineage_root_id ?? session.id])
+      const key = JSON.stringify([
+        session.connection_id ?? null,
+        normalizeVisibilityProfile(session.profile),
+        session._lineage_root_id ?? session.id
+      ])
 
       if (seen.has(key)) {
         return false
@@ -91,8 +95,7 @@ export function sessionsFeedShowsLoadMore({
   agentsGrouped,
   cronTruncated,
   ordinaryHasMore,
-  sessionsLoading,
-  showAllProfiles
+  sessionsLoading
 }: {
   agentsGrouped: boolean
   cronTruncated: boolean
@@ -104,5 +107,5 @@ export function sessionsFeedShowsLoadMore({
     return false
   }
 
-  return showAllProfiles ? cronTruncated : !agentsGrouped && (ordinaryHasMore || cronTruncated)
+  return !agentsGrouped && (ordinaryHasMore || cronTruncated)
 }

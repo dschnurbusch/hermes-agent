@@ -2783,9 +2783,11 @@ export function useSessionActions({
       }
 
       const ownerProfile = normalizeProfileKey(profile)
+
       const wasSelected =
         selectedStoredSessionIdRef.current === storedSessionId &&
         normalizeProfileKey($activeGatewayProfile.get()) === ownerProfile
+
       const previousPinned = $pinnedSessionIds.get()
       // Pins are keyed on the durable lineage-root id; the stored id may be the
       // live tip after compression. Drop both so the pin can't linger.

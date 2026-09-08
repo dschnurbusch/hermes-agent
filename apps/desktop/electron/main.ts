@@ -8897,11 +8897,7 @@ function probeSecureTokenStorage(): boolean {
     return true
   }
 
-  try {
-    return Boolean(safeStorage.isEncryptionAvailable())
-  } catch {
-    return false
-  }
+  return secureTokenStorageAvailable({ platform: process.platform, safeStorageApi: safeStorage })
 }
 
 /**
@@ -9608,7 +9604,7 @@ function sanitizeRegistryConnection(entry) {
 function sanitizeConnectionsRegistry(registry = readDesktopConnectionsRegistry()) {
   // Same keyring signal the v1 sanitize exposes: lets the Connections panel
   // offer the plain-text opt-in on keyring-less Linux instead of failing.
-  const secureTokenStorage = secureTokenStorageAvailable({ platform: process.platform, safeStorageApi: safeStorage })
+  const secureTokenStorage = probeSecureTokenStorage()
 
   return {
     version: registry.version,
@@ -9818,7 +9814,7 @@ async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionCon
   // false the renderer knows to offer the plain-text opt-in in Settings →
   // Gateway. safeStorage.isEncryptionAvailable can throw on some platforms, so
   // treat any failure as "not available".
-  const secureTokenStorage = secureTokenStorageAvailable({ platform: process.platform, safeStorageApi: safeStorage })
+  const secureTokenStorage = probeSecureTokenStorage()
 
   // Whether the renderer should warn that the saved token sits in plain text.
   // resolveRemoteTokenPlainText keeps this silent while keychain encryption is

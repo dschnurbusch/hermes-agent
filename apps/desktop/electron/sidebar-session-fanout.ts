@@ -2,6 +2,8 @@ interface SidebarSliceResponse {
   sessions?: unknown[]
   total?: number
   profile_totals?: Record<string, number>
+  errors?: Array<{ profile: string; error: string }>
+  profiles_truncated?: Record<string, boolean>
 }
 
 interface SidebarSessionsResponse {
@@ -10,9 +12,11 @@ interface SidebarSessionsResponse {
     sessions: unknown[]
     total: number
     profile_totals: Record<string, number>
+    errors?: Array<{ profile: string; error: string }>
+    profiles_truncated?: Record<string, boolean>
   }
-  cron: { sessions: unknown[] }
-  messaging: { sessions: unknown[]; total: number }
+  cron: SidebarSliceResponse & { sessions: unknown[] }
+  messaging: SidebarSliceResponse & { sessions: unknown[]; total: number }
   errors: unknown[]
 }
 
@@ -47,7 +51,7 @@ export async function fanOutSidebarSessions(
   }
 
   const cronSp = sliceParams('cron_limit', '50', { profile: cronProfile, source: 'cron' })
-  const messagingSp = sliceParams('messaging_limit', '100', { profile: 'all' })
+  const messagingSp = sliceParams('messaging_limit', '100', { profile: recentsProfile })
   const messagingExclude = searchParams.get('messaging_exclude')
 
   if (messagingExclude) {
@@ -63,12 +67,14 @@ export async function fanOutSidebarSessions(
   return {
     capabilities: { cron_profile: true },
     recents: {
+      ...recents,
       sessions: rowsOf(recents),
       total: Number(recents?.total) || 0,
       profile_totals: recents?.profile_totals || {}
     },
-    cron: { sessions: rowsOf(cron) },
+    cron: { ...cron, sessions: rowsOf(cron) },
     messaging: {
+      ...messaging,
       sessions: rowsOf(messaging),
       total: Number(messaging?.total) || rowsOf(messaging).length
     },

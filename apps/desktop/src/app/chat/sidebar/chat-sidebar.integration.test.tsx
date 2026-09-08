@@ -42,6 +42,7 @@ const renderSidebar = (pathname: string, currentView: AppView) =>
           onNewSessionInWorkspace={noop}
           onNewSessionSplit={noop}
           onResumeSession={noop}
+          onSetCronJobSessionsVisibility={noop}
           onTriggerCronJob={noopAsync}
         />
       </SidebarProvider>

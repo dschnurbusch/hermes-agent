@@ -413,7 +413,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const {
     loadMoreMessagingForPlatform,
     loadMoreSessions,
-    loadMoreSessionsForProfile,
     refreshCronJobs,
     refreshMessagingSessions,
     refreshSessions,
@@ -1151,7 +1150,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     // incorrectly persisted those rows as `local`, which made a remote session
     // click switch to the Mac backend and fail with "session not found".
     onResumeSession: (sessionId, sessionOrProfile) => {
-      const session = typeof sessionOrProfile === 'string' ? undefined : sessionOrProfile
+      const session = typeof sessionOrProfile === 'string' ? { profile: sessionOrProfile } : sessionOrProfile
       const ownerRoute = sessionOwnerRouteFromRow(session)
 
       if (ownerRoute) {
@@ -1414,9 +1413,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
         <Suspense fallback={null}>
           <CronView
             onClose={closeOverlayToPreviousRoute}
-            onOpenSession={(sessionId, profile) =>
-              profile ? navigate(sessionRoute(sessionId, profile)) : openSession(sessionId, navigate)
-            }
+            onOpenSession={nextActions.onResumeSession}
             onSetSessionsVisibility={setCronJobSessionsVisibility}
           />
         </Suspense>

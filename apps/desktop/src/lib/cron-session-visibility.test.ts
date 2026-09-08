@@ -100,6 +100,6 @@ describe('Sessions presentation merge', () => {
         sessionsLoading: false,
         showAllProfiles: true
       })
-    ).toBe(false)
+    ).toBe(true)
   })
 })

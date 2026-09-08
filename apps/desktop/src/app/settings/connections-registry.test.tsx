@@ -378,6 +378,7 @@ describe('ConnectionsRegistrySection', () => {
       tokenSet: false,
       url: 'https://legacy.hermes.cloud'
     }
+
     list.mockResolvedValueOnce({ ...registry, connections: [...registry.connections, cloud] })
 
     render(<ConnectionsRegistrySection />)

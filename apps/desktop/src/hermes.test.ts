@@ -209,7 +209,7 @@ describe('Hermes REST helpers', () => {
         path: expect.stringContaining('/api/profiles/sessions/sidebar?recents_profile=default')
       })
     )
-    expect(api.mock.calls[0][0]).not.toHaveProperty('profile')
+    expect(api.mock.calls[0][0]).toHaveProperty('profile', 'default')
   })
 
   it('routes legacy profile-session slices through the active backend scope', async () => {

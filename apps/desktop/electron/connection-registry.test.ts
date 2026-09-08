@@ -1430,6 +1430,7 @@ test('normalizeRegistry heals legacy Cloud token auth to OAuth and drops stale t
       }
     ]
   })
+
   const cloud = registry.connections.find(connection => connection.id === 'legacy-cloud')
 
   assert.equal(cloud?.authMode, 'oauth')

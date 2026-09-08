@@ -268,6 +268,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
       try {
         const limit = $sessionsLimit.get()
         const hiddenCronJobKeys = $cronJobsHiddenFromSessions.get()
+
         const cronRequestLimit = Math.min(
           CRON_INBOX_ACQUISITION_LIMIT,
           hasValidCronJobVisibilityKeys(hiddenCronJobKeys)
@@ -361,15 +362,14 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
               result.cron.sessions ?? [],
               result.cron.errors ?? result.errors
             )
+
             const bounded = incoming.slice(0, CRON_INBOX_ACQUISITION_LIMIT)
             const cronRows = dropTombstoned(bounded)
 
             return sameCronSignature(prev, cronRows) ? prev : cronRows
           })
           setCronSessionsAcquisitionTruncated(prev =>
-            result.cron.errors?.length || result.errors?.length
-              ? prev
-              : result.cron.sessions.length >= cronRequestLimit
+            result.cron.errors?.length || result.errors?.length ? prev : result.cron.sessions.length >= cronRequestLimit
           )
 
           // Messaging sections: drop any non-messaging source the broad exclude
@@ -422,28 +422,6 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
     [refreshSessions]
   )
 
-  // ALL-profiles view pages one profile at a time: fetch that profile's next
-  // page and merge it in place, leaving every other profile's rows untouched.
-  const loadMoreSessionsForProfile = useCallback(async (profile: string) => {
-    const key = normalizeProfileKey(profile)
-    const inKey = (s: SessionInfo) => normalizeProfileKey(s.profile) === key
-    const loaded = $sessions.get().filter(inKey).length
-
-    const result = await listAllProfileSessions(loaded + SIDEBAR_SESSIONS_PAGE_SIZE, 1, 'exclude', 'recent', key, {
-      excludeSources: SIDEBAR_EXCLUDED_SOURCES
-    })
-    const keep = sessionsToKeep(key)
-
-    setSessions(prev => [
-      ...prev.filter(s => !inKey(s)),
-      ...mergeSessionPage(prev.filter(inKey), result.sessions, keep)
-    ])
-    setSessionProfilesTruncated(prev => ({
-      ...prev,
-      [key]: result.sessions.length >= loaded + SIDEBAR_SESSIONS_PAGE_SIZE
-    }))
-  }, [])
-
   // A filter searches the loaded page, so switching one on has to deepen the
   // page — otherwise "merged PRs" answers for the last 50 rows and reads as
   // "you only have 6 merged PRs". Clearing the filters hands the window back:
@@ -477,7 +455,6 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
   return {
     loadMoreMessagingForPlatform,
     loadMoreSessions,
-    loadMoreSessionsForProfile,
     refreshCronJobs,
     refreshMessagingSessions,
     refreshSessions,

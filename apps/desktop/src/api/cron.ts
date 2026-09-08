@@ -1,3 +1,4 @@
+import { stampRowsWithOwningConnection } from '@/lib/session-owner-stamp'
 import type {
   AutomationBlueprint,
   CronDeliveryTarget,
@@ -7,7 +8,13 @@ import type {
   SessionInfo
 } from '@/types/hermes'
 
-import { connectionScoped, hermesApi, profileScoped, STARTUP_REQUEST_TIMEOUT_MS } from './client'
+import {
+  connectionScoped,
+  getApiRequestConnection,
+  hermesApi,
+  profileScoped,
+  STARTUP_REQUEST_TIMEOUT_MS
+} from './client'
 
 // The cron trigger endpoint intentionally waits for the whole job so its
 // response reflects the persisted execution result. Agent jobs can run far
@@ -39,14 +46,31 @@ export function getCronJob(jobId: string): Promise<CronJob> {
   })
 }
 
-export async function getCronJobRuns(jobId: string, limit = 20): Promise<SessionInfo[]> {
+function cronJobPath(jobId: string, suffix = '', profile?: null | string): string {
+  const query = new URLSearchParams()
+
+  if (profile) {
+    query.set('profile', profile)
+  }
+
+  const separator = suffix.includes('?') ? '&' : '?'
+
+  return `/api/cron/jobs/${encodeURIComponent(jobId)}${suffix}${query.size ? `${separator}${query}` : ''}`
+}
+
+export async function getCronJobRuns(jobId: string, limit = 20, profile?: null | string): Promise<SessionInfo[]> {
+  const connectionId = getApiRequestConnection()
+
   const { runs } = await hermesApi<{ runs: SessionInfo[] }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}`
+    path: cronJobPath(jobId, `/runs?limit=${limit}`, profile)
   })
 
-  return runs ?? []
+  return stampRowsWithOwningConnection(
+    (runs ?? []).map(run => ({ ...run, profile: run.profile ?? profile ?? 'default' })),
+    connectionId
+  )
 }
 
 // The single source of truth for cron delivery targets (local + configured
@@ -72,49 +96,49 @@ export function createCronJob(body: CronJobCreatePayload): Promise<CronJob> {
   })
 }
 
-export function updateCronJob(jobId: string, updates: CronJobUpdates): Promise<CronJob> {
+export function updateCronJob(jobId: string, updates: CronJobUpdates, profile?: null | string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}`,
+    path: cronJobPath(jobId, '', profile),
     method: 'PUT',
     body: { updates }
   })
 }
 
-export function pauseCronJob(jobId: string): Promise<CronJob> {
+export function pauseCronJob(jobId: string, profile?: null | string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}/pause`,
+    path: cronJobPath(jobId, '/pause', profile),
     method: 'POST'
   })
 }
 
-export function resumeCronJob(jobId: string): Promise<CronJob> {
+export function resumeCronJob(jobId: string, profile?: null | string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}/resume`,
+    path: cronJobPath(jobId, '/resume', profile),
     method: 'POST'
   })
 }
 
-export function triggerCronJob(jobId: string): Promise<CronJob> {
+export function triggerCronJob(jobId: string, profile?: null | string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}/trigger`,
+    path: cronJobPath(jobId, '/trigger', profile),
     method: 'POST',
     timeoutMs: CRON_TRIGGER_REQUEST_TIMEOUT_MS
   })
 }
 
-export function deleteCronJob(jobId: string): Promise<{ ok: boolean }> {
+export function deleteCronJob(jobId: string, profile?: null | string): Promise<{ ok: boolean }> {
   return hermesApi<{ ok: boolean }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}`,
+    path: cronJobPath(jobId, '', profile),
     method: 'DELETE'
   })
 }

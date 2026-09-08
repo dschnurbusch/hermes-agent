@@ -657,10 +657,20 @@ export function ChatSidebar({
 
   const visiblePresentedSessions = useMemo(
     () =>
-      showAllProfiles
-        ? presentedSessions
-        : presentedSessions.filter(s => normalizeProfileKey(s.profile) === profileScope),
-    [presentedSessions, profileScope, showAllProfiles]
+      (showArchived ? scopedSessions : presentedSessions).filter(
+        s =>
+          (showAllProfiles || normalizeProfileKey(s.profile) === profileScope) &&
+          (!filtersNarrow || sessionMatchesFilters(s))
+      ),
+    [
+      presentedSessions,
+      profileScope,
+      showAllProfiles,
+      filtersNarrow,
+      sessionMatchesFilters,
+      showArchived,
+      scopedSessions
+    ]
   )
 
   const searchableSessions = useMemo(() => {
@@ -1832,8 +1842,8 @@ export function ChatSidebar({
                   )
                 }
                 footer={
-                  // Ordinary All-Profiles paging stays on each profile header,
-                  // but cron owns one shared bounded window.
+                  // Gateway groups reveal loaded rows; this footer fetches older
+                  // ordinary rows and grows the independent cron window.
                   !showArchived &&
                   sessionsFeedShowsLoadMore({
                     agentsGrouped,

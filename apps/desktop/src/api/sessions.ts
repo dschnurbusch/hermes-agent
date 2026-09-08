@@ -200,6 +200,7 @@ function profilesTruncatedFrom(sessions: SessionInfo[], cap: number): Record<str
 }
 
 export interface SidebarSessionsResponse {
+  capabilities?: { cron_profile?: boolean }
   recents: SidebarSessionSlice
   cron: SidebarSessionSlice
   messaging: SidebarSessionSlice
@@ -210,6 +211,7 @@ export interface SidebarSessionsRequest {
   recentsProfile: 'all' | (string & {})
   recentsLimit: number
   recentsExclude: string[]
+  cronProfile?: 'all' | (string & {})
   cronLimit: number
   messagingLimit: number
   messagingExclude: string[]
@@ -242,7 +244,9 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
     listAllProfileSessions(req.recentsLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.recentsExclude
     }),
-    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', req.recentsProfile, { source: 'cron' }),
+    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', req.cronProfile ?? req.recentsProfile, {
+      source: 'cron'
+    }),
     listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.messagingExclude
     })
@@ -253,6 +257,7 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
   const messagingErrors = messaging.errors ?? []
 
   return {
+    capabilities: { cron_profile: true },
     recents: {
       profiles_truncated: profilesTruncatedFrom(recents.sessions, req.recentsLimit),
       sessions: recents.sessions,
@@ -298,6 +303,10 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
     messaging_limit: String(Math.max(1, req.messagingLimit))
   })
 
+  if (req.cronProfile) {
+    params.set('cron_profile', req.cronProfile)
+  }
+
   if (req.recentsExclude.length) {
     params.set('recents_exclude', req.recentsExclude.join(','))
   }
@@ -327,7 +336,12 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
     return listSidebarSessionsLegacy(req)
   }
 
+  if (req.cronProfile && req.cronProfile !== 'all' && result.capabilities?.cron_profile !== true) {
+    return listSidebarSessionsLegacy(req)
+  }
+
   return {
+    capabilities: result.capabilities,
     recents: {
       ...result.recents,
       sessions: stampActiveConnectionOwner(result.recents?.sessions ?? []),

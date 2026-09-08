@@ -1490,9 +1490,11 @@ export function findListedSession(
   sessionProfile?: string
 ): { session: SessionInfo; slice: ListedSessionSlice } | undefined {
   const ownerProfile = sessionProfile ? normalizeProfileKey(sessionProfile) : null
+
   const match = (session: SessionInfo) =>
     sessionMatchesStoredId(session, storedSessionId) &&
     (ownerProfile === null || normalizeProfileKey(session.profile) === ownerProfile)
+
   const fromMessaging = $messagingSessions.get().find(match)
 
   if (fromMessaging) {
@@ -1516,6 +1518,7 @@ export function findListedSession(
 
 export function dropListedSession(storedSessionId: string, sessionProfile?: string): void {
   const ownerProfile = sessionProfile ? normalizeProfileKey(sessionProfile) : null
+
   const keep = (session: SessionInfo) =>
     !sessionMatchesStoredId(session, storedSessionId) ||
     (ownerProfile !== null && normalizeProfileKey(session.profile) !== ownerProfile)
