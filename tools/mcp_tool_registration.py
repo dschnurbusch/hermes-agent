@@ -136,6 +136,16 @@ def _remove_server_scope(key, scope: str) -> None:
     for tool_name in registry.get_tool_names_for_toolset(f"mcp-{server_name}"):
         registry.deregister(tool_name, scope=scope)
     with _core._lock:
+        server = _core._servers.get(key)
+        if server is not None:
+            from hermes_constants import hermes_home_key
+            from tools.mcp_skills_registry import drop_live_catalog
+            profiles = getattr(server, "_skills_profile_fingerprints", {})
+            for home in list(profiles):
+                if hermes_home_key(home) == scope:
+                    profiles.pop(home)
+                    drop_live_catalog(home, server_name)
+            drop_live_catalog(scope, server_name)
         scopes = set(_core._server_tool_scopes.get(key, ()))
         scopes.discard(scope)
         if scopes:
@@ -498,6 +508,7 @@ def _register_connected_into_current_scope(servers: dict) -> int:
         with _core._lock:
             _core._server_tool_scopes.setdefault(key, set()).add(scope)
         _record_scope_trust(name, config, scope)
+        _adopt_skills_catalog(server, config)
         if registry.get_tool_names_for_toolset(f"mcp-{name}"):
             continue
         candidates = _tool_candidates(name, server._tools, _make_tool_filter(name, config), server.tool_timeout)
@@ -512,6 +523,34 @@ def _register_connected_into_current_scope(servers: dict) -> int:
                 server._registered_tool_names = sorted(
                     set(getattr(server, "_registered_tool_names", []) or ()) | set(names))
     return registered_servers
+
+
+def _adopt_skills_catalog(server: Any, config: dict) -> None:
+    """Copy metadata, not bodies or consent, into an adopting profile's Skills scope."""
+    from hermes_constants import get_hermes_home
+    from tools.mcp_skills_cache import _require_live_source
+    from tools.mcp_skills_protocol import skills_opted_in
+    from tools.mcp_skills_registry import drop_live_catalog, publish_live_catalog, server_config_fingerprint
+
+    owner = getattr(server, "_skills_home", None)
+    if not owner:
+        return
+    home = str(get_hermes_home().expanduser().absolute())
+    if home == owner:
+        return
+    try:
+        _require_live_source(server, owner)
+        ready = skills_opted_in(config)
+    except RuntimeError:
+        ready = False  # Never promote stale connection-generation metadata.
+    if not ready:
+        server._skills_profile_fingerprints.pop(home, None)
+        drop_live_catalog(home, server.name)
+        return
+    fingerprint = server_config_fingerprint(config)
+    if server._skills_profile_fingerprints.get(home) != fingerprint:
+        publish_live_catalog(home, server.name, fingerprint, server._skills_catalog)
+        server._skills_profile_fingerprints[home] = fingerprint
 
 
 def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]:

@@ -148,23 +148,26 @@ class MCPServerTransportMixin:
         from hermes_constants import get_hermes_home
         from tools.mcp_skills_registry import drop_live_catalog
 
-        # Revoke the generation identity first so concurrent source capture
-        # fails closed while the remaining diagnostic/catalog fields clear.
-        self._skills_ready_epoch = None
-        self._skills_ready_session = None
-        current_home = str(get_hermes_home())
-        name = getattr(self, "name", "")
-        for catalog_home in {current_home, str(getattr(self, "_skills_home", "") or "")} - {""}:
-            drop_live_catalog(catalog_home, name)
-        self._skills_catalog = ()
-        self._skills_diagnostic = None
-        self._skills_config_fingerprint = ""
-        self._skills_directory_read = False
-        self._skills_home = ""
-        self._skills_local_opt_in = False
-        self._skills_advertised = False
-        self._skills_list_completed = False
-        self._skills_connected = False
+        with _core._lock:
+            # Revoke the generation identity first so concurrent source capture
+            # fails closed while the remaining diagnostic/catalog fields clear.
+            self._skills_ready_epoch = None
+            self._skills_ready_session = None
+            current_home = str(get_hermes_home())
+            name = getattr(self, "name", "")
+            for catalog_home in ({current_home, str(getattr(self, "_skills_home", "") or "")}
+                                 | set(getattr(self, "_skills_profile_fingerprints", {}))) - {""}:
+                drop_live_catalog(catalog_home, name)
+            self._skills_profile_fingerprints = {}
+            self._skills_catalog = ()
+            self._skills_diagnostic = None
+            self._skills_config_fingerprint = ""
+            self._skills_directory_read = False
+            self._skills_home = ""
+            self._skills_local_opt_in = False
+            self._skills_advertised = False
+            self._skills_list_completed = False
+            self._skills_connected = False
 
     async def _discover_skills(self) -> None:
         """Publish validated metadata for opted-in advertising servers.

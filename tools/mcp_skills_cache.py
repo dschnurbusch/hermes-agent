@@ -92,13 +92,14 @@ def _capture_source(server_name: str, server: Any, home=None,
     session = getattr(server, "session", None)
     epoch = int(getattr(server, "_skills_epoch", 0))
     _require_live_source(server, home, expected_session=session, expected_epoch=epoch)
-    if expected_fingerprint is not None and server._skills_config_fingerprint != expected_fingerprint:
+    fingerprint = _source_fingerprint(server, home)
+    if expected_fingerprint is not None and fingerprint != expected_fingerprint:
         raise RuntimeError(
             "MCP skill origin no longer matches the connected profile/configuration; start a new session after reconnect")
     return _SourceToken(
         server_name=server_name,
         home=str(validate_managed_root(Path(home or get_hermes_home()).expanduser()).absolute()),
-        config_fingerprint=server._skills_config_fingerprint,
+        config_fingerprint=fingerprint,
         epoch=epoch,
         server=server,
         session=session,
@@ -113,7 +114,7 @@ def _require_source_token(token: _SourceToken) -> None:
         raise RuntimeError("MCP skill source changed while the remote operation was in flight; result discarded")
     _require_live_source(
         current, token.home, expected_session=token.session, expected_epoch=token.epoch)
-    if (getattr(current, "_skills_config_fingerprint", "") != token.config_fingerprint
+    if (_source_fingerprint(current, token.home) != token.config_fingerprint
             or int(getattr(current, "_skills_epoch", 0)) != token.epoch):
         raise RuntimeError("MCP skill source changed while the remote operation was in flight; result discarded")
 
@@ -165,16 +166,23 @@ def _ensure_get_verified(record: dict[str, Any], home=None, session_id: str | No
 
 def _require_live_origin(server: Any, record: dict[str, Any], home=None) -> None:
     _require_live_source(server, home)
-    if getattr(server, "_skills_config_fingerprint", "") != record["config_fingerprint"]:
+    if _source_fingerprint(server, home) != record["config_fingerprint"]:
         raise RuntimeError(
             "MCP skill origin no longer matches the connected profile/configuration; start a new session after reconnect")
+
+
+def _source_fingerprint(server: Any, home=None) -> str:
+    requested = str(Path(home or get_hermes_home()).expanduser().absolute())
+    owner = str(validate_managed_root(
+        Path(getattr(server, "_skills_home", "") or ".").expanduser()).absolute())
+    if requested == owner:
+        return getattr(server, "_skills_config_fingerprint", "")
+    return getattr(server, "_skills_profile_fingerprints", {}).get(requested, "")
 
 
 def _require_live_source(server: Any, home=None, *, expected_session: Any = None,
                          expected_epoch: int | None = None) -> None:
     requested_home = str(validate_managed_root(Path(home or get_hermes_home()).expanduser()).absolute())
-    live_home = str(validate_managed_root(
-        Path(getattr(server, "_skills_home", "") or ".").expanduser()).absolute())
     retained_fingerprint = getattr(server, "_skills_config_fingerprint", "")
     current_fingerprint = server_config_fingerprint(getattr(server, "_config", {}) or {})
     current_session = getattr(server, "session", None)
@@ -183,7 +191,7 @@ def _require_live_source(server: Any, home=None, *, expected_session: Any = None
         "_skills_local_opt_in", "_skills_advertised", "_skills_list_completed", "_skills_connected"))
     if (not ready or current_session is None
             or not skills_opted_in(getattr(server, "_config", {}) or {})
-            or live_home != requested_home or not retained_fingerprint
+            or not _source_fingerprint(server, requested_home) or not retained_fingerprint
             or current_fingerprint != retained_fingerprint
             or getattr(server, "_skills_ready_session", None) is not current_session
             or getattr(server, "_skills_ready_epoch", None) != current_epoch

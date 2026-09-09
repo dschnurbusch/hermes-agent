@@ -319,7 +319,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_suspect_reason", "_teardown_race", "_permanent_grace_used", "_stdio_child_pids",
         "_ever_connected", "_sse_fallback", "_park_reason", "_last_park_line",
         "_skills_catalog", "_skills_diagnostic", "_skills_directory_read",
-        "_skills_config_fingerprint", "_skills_home", "_skills_local_opt_in",
+        "_skills_config_fingerprint", "_skills_home", "_skills_profile_fingerprints", "_skills_local_opt_in",
         "_skills_advertised", "_skills_list_completed", "_skills_connected", "_skills_epoch",
         "_skills_ready_session", "_skills_ready_epoch")
 
@@ -411,6 +411,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._skills_directory_read: bool = False
         self._skills_config_fingerprint: str = ""
         self._skills_home: Optional[str] = None
+        self._skills_profile_fingerprints: dict[str, str] = {}
         self._skills_local_opt_in: bool = False
         self._skills_advertised: bool = False
         self._skills_list_completed: bool = False
