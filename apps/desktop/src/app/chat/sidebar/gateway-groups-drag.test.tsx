@@ -37,6 +37,7 @@ const mount = () =>
           onNewSessionInWorkspace={noop}
           onNewSessionSplit={noop}
           onResumeSession={vi.fn()}
+          onSetCronJobSessionsVisibility={async () => {}}
           onTriggerCronJob={async () => {}}
         />
       </SidebarProvider>

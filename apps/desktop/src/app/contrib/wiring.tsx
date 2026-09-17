@@ -409,7 +409,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     [dispatchSessionRpc]
   )
 
-
   const {
     loadMoreMessagingForPlatform,
     loadMoreSessions,

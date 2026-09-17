@@ -657,29 +657,16 @@ export function ChatSidebar({
 
   const visiblePresentedSessions = useMemo(
     () =>
-      (showArchived ? scopedSessions : presentedSessions).filter(
-        s =>
-          (showAllProfiles || normalizeProfileKey(s.profile) === profileScope) &&
-          (!filtersNarrow || sessionMatchesFilters(s))
+      filterSessionsByProfileScope(showArchived ? scopedSessions : presentedSessions, profileScope).filter(
+        s => !filtersNarrow || sessionMatchesFilters(s)
       ),
-    [
-      presentedSessions,
-      profileScope,
-      showAllProfiles,
-      filtersNarrow,
-      sessionMatchesFilters,
-      showArchived,
-      scopedSessions
-    ]
+    [presentedSessions, profileScope, filtersNarrow, sessionMatchesFilters, showArchived, scopedSessions]
   )
 
-  const searchableSessions = useMemo(() => {
-    const visibleCron = showAllProfiles
-      ? cronSessions
-      : cronSessions.filter(s => normalizeProfileKey(s.profile) === profileScope)
-
-    return mergeSessionsForPresentation(visibleSessions, visibleCron)
-  }, [cronSessions, profileScope, showAllProfiles, visibleSessions])
+  const searchableSessions = useMemo(
+    () => mergeSessionsForPresentation(visibleSessions, filterSessionsByProfileScope(cronSessions, profileScope)),
+    [cronSessions, profileScope, visibleSessions]
+  )
 
   // Recents by activity (last_active || started_at). User send stamps
   // last_active immediately. Ordering by status doesn't sort here — it re-slots

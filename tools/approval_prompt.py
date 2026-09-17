@@ -7,11 +7,9 @@ persistence, timeout policy and the final authorization stay host-owned in
 """
 
 import logging
-import inspect
 import os
 import sys
 import threading
-from typing import Any
 from tools import approval_context as _ctx, approval_gateway_wait as _gw
 from tools.approval_human_wait import activity_heartbeat, human_wait_window
 from tools.interrupt import is_interrupted

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.fixture
-def shared(tmp_path, monkeypatch):
+@pytest.fixture(params=["legacy", "profile-keyed"])
+def shared(tmp_path, monkeypatch, request):
     from agent.secret_scope import is_multiplex_active, set_multiplex_active
     from hermes_constants import hermes_home_key, set_hermes_home_override, reset_hermes_home_override
     from tools import mcp_tool as core, mcp_skills_registry as skills
@@ -38,9 +38,11 @@ def shared(tmp_path, monkeypatch):
     server.initialize_result = SimpleNamespace(capabilities=SimpleNamespace(
         extensions={"io.modelcontextprotocol/skills": {}}, resources=SimpleNamespace(), prompts=None))
     server.session = Session()
-    monkeypatch.setattr(core, "_servers", {"fixture": server})
-    monkeypatch.setattr(core, "_server_scope_keys", {"fixture": hermes_home_key(a)})
-    monkeypatch.setattr(core, "_server_tool_scopes", {"fixture": {hermes_home_key(a)}})
+    from tools.mcp_tool_scope import _server_key
+    key = "fixture" if request.param == "legacy" else _server_key("fixture", hermes_home_key(a), current=False)
+    monkeypatch.setattr(core, "_servers", {key: server})
+    monkeypatch.setattr(core, "_server_scope_keys", {key: hermes_home_key(a)})
+    monkeypatch.setattr(core, "_server_tool_scopes", {key: {hermes_home_key(a)}})
     from tools import mcp_tool_loop
     monkeypatch.setattr(mcp_tool_loop, "_run_on_mcp_loop", lambda factory, **kw: asyncio.run(factory()))
     skills.clear_runtime_state()
