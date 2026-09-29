@@ -156,6 +156,32 @@ def _base_config(**extra):
     return cfg
 
 
+@pytest.mark.asyncio
+async def test_cron_chunks_use_first_google_thread_and_fail_closed_on_split(adapter):
+    from gateway.platforms.base import SendResult
+
+    observed = []
+    async def create(chat_id, body):
+        observed.append(body)
+        thread = (body.get("thread") or {}).get("name") or "spaces/S/threads/first"
+        if len(observed) == 2 and split:
+            thread = "spaces/S/threads/other"
+        return SendResult(success=True, message_id=f"spaces/S/messages/{len(observed)}",
+                          raw_response={"thread": {"name": thread}})
+
+    adapter._chunk_text = lambda content: ["first", "second"]
+    adapter._create_message = create
+    split = False
+    result = await adapter.send("spaces/S", "long", metadata={"job_id": "j"})
+    assert observed[1]["thread"]["name"] == "spaces/S/threads/first"
+    assert adapter.outbound_reply_anchor(result) == ("thread", "spaces/S/threads/first")
+
+    observed.clear()
+    split = True
+    result = await adapter.send("spaces/S", "long", metadata={"job_id": "j"})
+    assert adapter.outbound_reply_anchor(result) is None
+
+
 @pytest.fixture()
 def adapter(tmp_path):
     """Build an adapter with its loop captured and Chat client mocked.

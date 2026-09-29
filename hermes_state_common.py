@@ -528,6 +528,46 @@ CREATE TABLE IF NOT EXISTS session_turn_leases (
     expires_at REAL NOT NULL
 );
 
+-- Exact, confirmed outbound anchors for replies that may resume the completed cron run which
+-- produced them.  This is deliberately separate from gateway routing: a missing row preserves
+-- the ordinary chat/thread session, while a row can be validated against session lifecycle and
+-- live leases before it is trusted.
+CREATE TABLE IF NOT EXISTS cron_delivery_provenance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_name TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    scope_id TEXT NOT NULL DEFAULT '',
+    chat_id TEXT NOT NULL,
+    anchor_kind TEXT NOT NULL,
+    anchor_id TEXT NOT NULL,
+    thread_root TEXT NOT NULL DEFAULT '',
+    cron_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL DEFAULT '',
+    execution_id TEXT NOT NULL DEFAULT '',
+    delivered_at REAL NOT NULL,
+    UNIQUE(profile_name, platform, scope_id, chat_id, anchor_kind, anchor_id, cron_session_id)
+);
+
+-- A consumed anchor must not be resurrected by a delayed queue receipt after adoption.
+CREATE TABLE IF NOT EXISTS cron_delivery_consumed (
+    cron_session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    consumed_at REAL NOT NULL
+);
+
+-- Bound to the signed owner and the exact owner-isolated route, not merely a thread id.
+-- Legacy consumed rows without this binding can never be reopened in a group.
+CREATE TABLE IF NOT EXISTS cron_reply_ownership (
+    cron_session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    session_key TEXT NOT NULL UNIQUE,
+    profile_name TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS async_delegations (
     delegation_id TEXT PRIMARY KEY,
     origin_session TEXT NOT NULL,
@@ -574,6 +614,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_assistant_calls_by_session
     WHERE role = 'assistant' AND tool_calls IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
 CREATE INDEX IF NOT EXISTS idx_session_turn_leases_expires ON session_turn_leases(expires_at);
+CREATE INDEX IF NOT EXISTS idx_cron_delivery_anchor
+ON cron_delivery_provenance(profile_name, platform, scope_id, chat_id, anchor_kind, anchor_id);
+CREATE INDEX IF NOT EXISTS idx_cron_delivery_session
+ON cron_delivery_provenance(cron_session_id);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_session ON session_model_usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_model ON session_model_usage(model);
 CREATE INDEX IF NOT EXISTS idx_async_delegations_delivery

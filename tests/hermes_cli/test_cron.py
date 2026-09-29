@@ -23,6 +23,31 @@ def tmp_cron_dir(tmp_path, monkeypatch):
 
 
 class TestCronCommandLifecycle:
+    def test_public_thread_continuation_create_and_edit(self, tmp_cron_dir, capsys):
+        parser = argparse.ArgumentParser(prog="hermes")
+        build_cron_parser(parser.add_subparsers(dest="command"), cmd_cron=cron_command)
+        assert cron_command(parser.parse_args([
+            "cron", "create", "1h", "Public briefing", "--deliver", "slack:C0123456",
+            "--public-thread-continuation",
+        ])) == 0
+        job = next(j for j in list_jobs() if j["prompt"] == "Public briefing")
+        assert job["public_thread_continuation"] is True
+        assert cron_command(parser.parse_args([
+            "cron", "edit", job["id"], "--no-public-thread-continuation",
+        ])) == 0
+        assert get_job(job["id"])["public_thread_continuation"] is False
+        assert cron_command(parser.parse_args([
+            "cron", "edit", job["id"], "--name", "Renamed",
+        ])) == 0
+        assert get_job(job["id"])["public_thread_continuation"] is False
+        assert cron_command(parser.parse_args([
+            "cron", "edit", job["id"], "--public-thread-continuation",
+        ])) == 0
+        assert get_job(job["id"])["public_thread_continuation"] is True
+        assert cron_command(parser.parse_args([
+            "cron", "create", "1h", "Private briefing", "--no-public-thread-continuation",
+        ])) == 0
+        assert not next(j for j in list_jobs() if j["prompt"] == "Private briefing").get("public_thread_continuation", False)
 
     def test_edit_persists_user_owned_inference_pins(self, tmp_cron_dir, capsys):
         job = create_job(prompt="Daily report", schedule="every 1h")

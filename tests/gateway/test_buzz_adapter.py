@@ -97,6 +97,65 @@ def _make_adapter(extra=None):
     return adapter
 
 
+def test_verified_chat_type_requires_connected_inventory_and_rejects_dm(tmp_path, monkeypatch):
+    adapter = _make_adapter()
+    adapter._channel_state[CHANNEL] = adapter._new_channel_state("group")
+    assert adapter.chat_type_for_chat(CHANNEL) is None
+    adapter._mark_connected()
+    assert adapter.chat_type_for_chat(CHANNEL) is None  # Watch ID/cursor alone is unverified.
+    adapter._channel_meta[CHANNEL] = {"channel_id": CHANNEL, "name": "Announcements"}
+    adapter._dm_inventory_confirmed = True
+    assert adapter.chat_type_for_chat(CHANNEL) == "group"
+    adapter._channel_meta[DM_CHANNEL] = {"channel_id": DM_CHANNEL, "name": "DM", "description": ""}
+    adapter._channel_state[DM_CHANNEL] = adapter._new_channel_state("group")
+    assert adapter.chat_type_for_chat(DM_CHANNEL) is None
+    adapter._channel_state[DM_CHANNEL]["chat_type"] = "dm"
+    assert adapter.chat_type_for_chat(DM_CHANNEL) == "dm"
+    monkeypatch.setattr(adapter, "_cursor_path", lambda: tmp_path / "cursors.json")
+    adapter._save_cursors()
+    restored = _make_adapter()
+    monkeypatch.setattr(restored, "_cursor_path", lambda: tmp_path / "cursors.json")
+    restored._load_cursors()
+    assert restored._restore_channel_state(CHANNEL, "group")
+    restored._mark_connected()
+    assert restored.chat_type_for_chat(CHANNEL) is None  # Must refresh authenticated inventory.
+    restored._channel_meta[CHANNEL] = {"channel_id": CHANNEL, "name": "Announcements"}
+    restored._dm_inventory_confirmed = True
+    assert restored.chat_type_for_chat(CHANNEL) == "group"
+
+
+@pytest.mark.asyncio
+async def test_dm_inventory_overlap_overrides_public_channel_provenance():
+    adapter = _make_adapter(extra={"channels": [CHANNEL]})
+    adapter._channel_state[CHANNEL] = adapter._new_channel_state("group")
+    adapter._channel_meta[CHANNEL] = {"channel_id": CHANNEL, "name": "general"}
+    adapter._mark_connected()
+    assert adapter.chat_type_for_chat(CHANNEL) is None
+    adapter._dm_inventory_confirmed = True
+    assert adapter.chat_type_for_chat(CHANNEL) == "group"
+    cli = _ScriptedCli()
+    cli.script("dms", "list", [{"dm_id": CHANNEL}])
+    cli.script("channels", "list", [{"channel_id": CHANNEL, "name": "general"}])
+    adapter._run_cli = cli
+    await adapter._discover_dms(seed=False)
+    assert adapter.chat_type_for_chat(CHANNEL) == "dm"
+    assert adapter._channel_state[CHANNEL]["chat_type"] == "dm"
+
+
+@pytest.mark.asyncio
+async def test_failed_dm_inventory_never_certifies_public_channel():
+    adapter = _make_adapter(extra={"channels": [CHANNEL]})
+    adapter._channel_state[CHANNEL] = adapter._new_channel_state("group")
+    adapter._channel_meta[CHANNEL] = {"channel_id": CHANNEL, "name": "general"}
+    adapter._mark_connected()
+    cli = _ScriptedCli()
+    cli.script("dms", "list", [], code=2)
+    cli.script("channels", "list", [{"channel_id": CHANNEL, "name": "general"}])
+    adapter._run_cli = cli
+    await adapter._discover_dms(seed=False)
+    assert adapter.chat_type_for_chat(CHANNEL) is None
+
+
 class _ScriptedCli:
     """Fake ``_run_cli`` that routes on the buzz subcommand and records calls."""
 
@@ -2558,6 +2617,31 @@ class TestThreadAnchoring:
         a = _make_adapter()
         ev = self._event("m3", ["e", "root1", "", "root"], ["e", "m2", "", "reply"])
         assert a._extract_thread_root(ev) == "root1"
+
+    @pytest.mark.asyncio
+    async def test_cron_anchor_requires_immediate_reply_not_thread_root(self):
+        adapter = _make_adapter(extra={"require_mention": False})
+        state = adapter._channel_state[CHANNEL] = adapter._new_channel_state("group")
+        captured = []
+
+        async def capture(event):
+            captured.append(event)
+
+        adapter.handle_message = capture
+        adapter._message_handler = AsyncMock()
+        adapter._resolve_user_name = AsyncMock(return_value="Guest")
+        adapter.send_reaction = AsyncMock(return_value=True)
+        for event_id, tags, expected in (
+            ("root-only", [["e", "cron-message", "", "root"]], None),
+            ("different-parent", [["e", "cron-message", "", "root"], ["e", "other", "", "reply"]], ("message", "other")),
+            ("direct", [["e", "cron-message", "", "reply"]], ("message", "cron-message")),
+            ("later-turn", [["e", "cron-message", "", "root"], ["e", "agent-answer", "", "reply"]], ("message", "agent-answer")),
+        ):
+            event = _event(event_id)
+            event["tags"].extend(tags)
+            await adapter._handle_event(CHANNEL, state, event)
+            assert adapter.inbound_reply_anchor(captured[-1]) == expected
+            assert captured[-1].source.thread_id == "cron-message"
 
     def test_legacy_unmarked_etag_treated_as_parent(self):
         a = _make_adapter()

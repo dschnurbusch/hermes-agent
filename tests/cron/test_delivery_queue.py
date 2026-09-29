@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
 from unittest.mock import Mock
 
 import pytest
@@ -70,6 +72,142 @@ def test_failure_delivery_lane_survives_durable_handoff(tmp_path, monkeypatch):
         "failed",
         True,
     )
+
+
+def test_confirmed_reply_provenance_returns_to_external_worker(tmp_path, monkeypatch):
+    import json
+    import cron.delivery_queue as queue
+
+    monkeypatch.setattr(queue, "DELIVERY_DB", tmp_path / "deliveries.db")
+    queue.enqueue("exec-provenance", {"id": "job-1"}, "brief")
+    candidate = {
+        "platform": "buzz", "chat_id": "channel-a", "anchor_kind": "message",
+        "anchor_id": "event-1", "cron_session_id": "cron-1", "job_id": "job-1",
+    }
+
+    def send(job, _content, _for_failure):
+        job["_cron_delivery_provenance"] = candidate
+        return None
+
+    assert queue.drain(send) == 1
+    status = queue.get_status("exec-provenance")
+    assert status["status"] == "delivered"
+    assert json.loads(status["provenance_json"]) == candidate
+
+
+def test_late_receipt_persists_only_after_completed_execution_in_own_profile(tmp_path, monkeypatch):
+    from cron import delivery_queue as queue, executions, reply_provenance
+    from cron.scheduler_provider import _profile_cron_scope
+    from hermes_constants import get_hermes_home
+
+    monkeypatch.setattr(queue, "DELIVERY_DB", None)
+    a, b = tmp_path / "profiles" / "a", tmp_path / "profiles" / "b"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    records = []
+    completed = set()
+    available = set()
+    monkeypatch.setattr(executions, "get_execution", lambda eid: {
+        "status": "completed" if eid in completed else "running", "job_id": "job-1",
+    })
+    def record(candidate):
+        if candidate["execution_id"] not in available:
+            return False
+        records.append((get_hermes_home(), candidate))
+        return True
+    monkeypatch.setattr(reply_provenance, "record_confirmed_delivery", record)
+
+    def create(home, execution_id):
+        candidate = {
+            "execution_id": execution_id, "job_id": "job-1", "platform": "slack",
+            "chat_id": "channel", "anchor_kind": "message", "anchor_id": execution_id,
+            "cron_session_id": "cron-session", "owner_user_id": "owner",
+        }
+        with _profile_cron_scope(home):
+            queue.enqueue(execution_id, {"id": "job-1", "_cron_run_session_id": "cron-session"}, "brief")
+            def send(job, _content, _for_failure):
+                job["_cron_delivery_provenance"] = candidate
+            assert queue.drain(send) == 1
+            assert queue.get_status(execution_id)["provenance_json"]
+        return candidate
+
+    candidate_a = create(a, "exec-a")
+    candidate_b = create(b, "exec-b")
+    assert records == []  # The send may precede worker fire-claim completion.
+    completed.update(("exec-a", "exec-b"))
+    with _profile_cron_scope(a):
+        assert queue.drain(lambda *_: pytest.fail("duplicate send")) == 0
+        assert queue.get_status("exec-a")["provenance_json"]  # State write failed: retryable.
+    available.update(("exec-a", "exec-b"))
+    with _profile_cron_scope(a):
+        assert queue.drain(lambda *_: pytest.fail("duplicate send")) == 0
+        assert queue.get_status("exec-a")["provenance_json"] is None
+    with _profile_cron_scope(b):
+        assert queue.drain(lambda *_: pytest.fail("duplicate send")) == 0
+        assert queue.get_status("exec-b")["provenance_json"] is None
+    with _profile_cron_scope(a):
+        assert queue.drain(lambda *_: pytest.fail("duplicate persistence")) == 0
+    assert records == [(a, candidate_a), (b, candidate_b)]
+
+
+def test_unpersisted_provenance_survives_aging_and_terminal_pruning_but_is_bounded(tmp_path, monkeypatch):
+    from cron import delivery_queue as queue
+
+    monkeypatch.setattr(queue, "DELIVERY_DB", tmp_path / "deliveries.db")
+    monkeypatch.setattr(queue, "MAX_TERMINAL_DELIVERIES", 0)
+    monkeypatch.setattr(queue, "MAX_UNPERSISTED_PROVENANCE", 2)
+    for index in range(3):
+        execution_id = f"terminal-{index}"
+        candidate = {"execution_id": execution_id, "job_id": "job-1", "owner_user_id": "secret"}
+        queue.enqueue(execution_id, {"id": "job-1"}, "brief")
+        assert queue.claim_next()["execution_id"] == execution_id
+        assert queue._finish(execution_id, error=None, provenance=candidate)
+        with queue._transaction() as conn:
+            conn.execute("UPDATE deliveries SET finished_at='2000-01-01T00:00:00+00:00' "
+                         "WHERE execution_id=?", (execution_id,))
+            queue._prune_terminal_unlocked(conn)
+    assert queue.get_status("terminal-0").get("provenance_json") is None
+    for index in (1, 2):
+        assert queue.get_status(f"terminal-{index}")["provenance_json"] is not None
+    queue.enqueue("pending", {"id": "job-2", "private": "recoverable"}, "queued brief")
+    pending = queue.get_status("pending")
+    assert pending["status"] == "pending"
+    assert pending["content"] == "queued brief"
+    assert '"private": "recoverable"' in pending["job_json"]
+
+
+def test_aged_receipt_survives_restart_pruning_and_is_persisted(tmp_path, monkeypatch):
+    import json
+    from cron import delivery_queue as queue
+
+    monkeypatch.setattr(queue, "DELIVERY_DB", tmp_path / "deliveries.db")
+    candidate = {"execution_id": "old-run", "job_id": "job-1", "platform": "slack",
+                 "chat_id": "channel", "anchor_kind": "message", "anchor_id": "anchor",
+                 "cron_session_id": "cron-session", "owner_user_id": "owner"}
+    queue.enqueue("old-run", {"id": "job-1"}, "brief")
+    assert queue.claim_next()["execution_id"] == "old-run"
+    assert queue._finish("old-run", error=None, provenance=candidate)
+    with queue._transaction() as conn:
+        conn.execute("UPDATE deliveries SET finished_at='2000-01-01T00:00:00+00:00' "
+                     "WHERE execution_id='old-run'")
+
+    # A fresh interpreter models the gateway restarting after the worker has
+    # finished. recover_abandoned prunes before drain retries provenance.
+    result = subprocess.run([sys.executable, "-c", """
+import json, sys
+from cron import delivery_queue as queue, executions, reply_provenance
+queue.DELIVERY_DB = __import__('pathlib').Path(sys.argv[1])
+queue.MAX_TERMINAL_DELIVERIES = 0
+executions.get_execution = lambda eid: {'status': 'completed', 'job_id': 'job-1'}
+reply_provenance.record_confirmed_delivery = lambda candidate: (
+    __import__('pathlib').Path(sys.argv[2]).write_text(json.dumps(candidate)) or True)
+assert queue.drain(lambda *_: (_ for _ in ()).throw(AssertionError('duplicate send'))) == 0
+assert queue.get_status('old-run')['status'] == 'delivered'
+""", str(tmp_path / "deliveries.db"), str(tmp_path / "recorded.json")],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads((tmp_path / "recorded.json").read_text()) == candidate
+    assert queue.get_status("old-run").get("provenance_json") is None
 
 
 def test_legacy_queue_schema_adds_failure_lane_before_enqueue(tmp_path, monkeypatch):

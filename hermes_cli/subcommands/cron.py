@@ -83,6 +83,15 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
             "into its prompt, so it can dedupe against what was already "
             "reported and continue where the last run left off (scouts, "
             "monitors, incremental digests). First run is unchanged.")
+    _public_thread_create = cron_create.add_mutually_exclusive_group()
+    _public_thread_create.add_argument(
+        "--public-thread-continuation", dest="public_thread_continuation",
+        action="store_const", const=True, default=None,
+        help="Allow replies in eligible public delivery threads to continue the cron conversation.")
+    _public_thread_create.add_argument(
+        "--no-public-thread-continuation", dest="public_thread_continuation",
+        action="store_const", const=False,
+        help="Disable continuation from public delivery threads (default).")
 
     _flag(cron_create, "--paused", default=False,
         help="Create disabled in one write; resume to schedule, or explicitly run now.")
@@ -121,6 +130,15 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
             "previous output (dedupe, continue where it left off).")
     cron_edit.add_argument("--no-continuity", dest="continuity", action="store_const", const=False,
         help=("Turn off run-to-run continuity (other context_from job refs are preserved)."))
+    _public_thread_edit = cron_edit.add_mutually_exclusive_group()
+    _public_thread_edit.add_argument(
+        "--public-thread-continuation", dest="public_thread_continuation",
+        action="store_const", const=True, default=None,
+        help="Allow replies in eligible public delivery threads to continue the cron conversation.")
+    _public_thread_edit.add_argument(
+        "--no-public-thread-continuation", dest="public_thread_continuation",
+        action="store_const", const=False,
+        help="Disable continuation from public delivery threads.")
     cron_edit.add_argument("--monitor-script", dest="monitor_script",
         help="Set/replace the monitor source script (see `hermes cron create "
             "--monitor-script`). Pass empty string to clear.")

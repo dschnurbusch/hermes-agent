@@ -491,6 +491,44 @@ class TestAgentCannotSetModelPin:
         assert stored["name"] == "renamed"
 
 
+class TestRegisteredHandlerPublicThreadContinuation:
+    @pytest.fixture(autouse=True)
+    def _setup_cron_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
+        monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
+        monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+
+    def test_registered_create_update_round_trip(self):
+        from cron.jobs import get_job
+        from tools.cronjob_tools import CRONJOB_SCHEMA
+        from tools.registry import registry
+
+        assert CRONJOB_SCHEMA["parameters"]["properties"]["public_thread_continuation"]["type"] == "boolean"
+        created = json.loads(registry.dispatch("cronjob_manage", {
+            "action": "create", "schedule": "1h", "prompt": "Briefing",
+            "deliver": "slack:C0123456", "public_thread_continuation": True,
+        }))
+        assert created["success"] is True, created
+        job_id = created["job_id"]
+        assert created["job"]["public_thread_continuation"] is True
+        assert get_job(job_id)["public_thread_continuation"] is True
+
+        disabled = json.loads(registry.dispatch("cronjob_manage", {
+            "action": "update", "job_id": job_id, "public_thread_continuation": False,
+        }))
+        assert disabled["success"] is True, disabled
+        assert disabled["job"]["public_thread_continuation"] is False
+        assert get_job(job_id)["public_thread_continuation"] is False
+        listed = json.loads(registry.dispatch("cronjob_manage", {"action": "list"}))
+        assert next(j for j in listed["jobs"] if j["job_id"] == job_id)["public_thread_continuation"] is False
+
+        enabled = json.loads(registry.dispatch("cronjob_manage", {
+            "action": "update", "job_id": job_id, "public_thread_continuation": True,
+        }))
+        assert enabled["success"] is True, enabled
+        assert get_job(job_id)["public_thread_continuation"] is True
+
+
 class TestRegisteredHandlerForwardsAttachToSession:
     """#84802 — schema + cronjob() already accept attach_to_session, but the
     registry adapter must forward it or create silently drops the field and

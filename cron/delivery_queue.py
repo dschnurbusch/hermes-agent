@@ -34,6 +34,10 @@ _ACTIVE_DELIVERIES: set[str] = set()
 _TERMINAL = ("delivered", "failed", "unknown", "suppressed")
 MAX_TERMINAL_DELIVERIES = 1000
 DEFAULT_DELIVERY_WAIT_TIMEOUT_SECONDS = 300.0
+# Keep receipts until their state-store write succeeds, including across long
+# gateway outages. Bound an indefinitely failing store independently of ordinary
+# terminal outcome retention.
+MAX_UNPERSISTED_PROVENANCE = 1000
 
 
 def _prune_terminal_unlocked(conn: sqlite3.Connection) -> None:
@@ -43,13 +47,32 @@ def _prune_terminal_unlocked(conn: sqlite3.Connection) -> None:
            WHERE status IN ('delivered','failed','unknown','suppressed')
              AND (job_json != '{}' OR content != '')"""
     )
-    keep = max(0, int(MAX_TERMINAL_DELIVERIES))
-    terminal_count = int(
+    # A receipt can predate execution completion, and a state-store failure may
+    # outlast any wall-clock grace period. Never expire it just for being old.
+    # When persistence is unavailable indefinitely, retain the newest bounded
+    # set and report overflow rather than silently growing private metadata.
+    receipt_count = int(conn.execute(
+        "SELECT COUNT(*) FROM deliveries WHERE status='delivered' "
+        "AND provenance_json IS NOT NULL"
+    ).fetchone()[0])
+    overflow = receipt_count - max(0, int(MAX_UNPERSISTED_PROVENANCE))
+    if overflow > 0:
+        logger.warning("Cron delivery provenance backlog exceeded retention cap; "
+                       "discarding %d oldest unpersisted receipts", overflow)
         conn.execute(
-            "SELECT COUNT(*) FROM deliveries "
-            "WHERE status IN ('delivered','failed','unknown','suppressed')"
-        ).fetchone()[0]
-    )
+            """UPDATE deliveries SET provenance_json=NULL WHERE execution_id IN (
+                 SELECT execution_id FROM deliveries
+                 WHERE status='delivered' AND provenance_json IS NOT NULL
+                 ORDER BY finished_at, created_at, execution_id LIMIT ?
+               )""", (overflow,),
+        )
+    keep = max(0, int(MAX_TERMINAL_DELIVERIES))
+    # Protected receipts are outside the ordinary terminal-row cap. They are
+    # bounded by MAX_UNPERSISTED_PROVENANCE above instead.
+    eligible = "status IN ('delivered','failed','unknown','suppressed') AND provenance_json IS NULL"
+    terminal_count = int(conn.execute(
+        f"SELECT COUNT(*) FROM deliveries WHERE {eligible}"
+    ).fetchone()[0])
     excess = terminal_count - keep
     if excess > 0:
         conn.execute(
@@ -57,6 +80,7 @@ def _prune_terminal_unlocked(conn: sqlite3.Connection) -> None:
                (execution_id, terminal_status, finished_at)
                SELECT execution_id, status, finished_at FROM deliveries
                WHERE status IN ('delivered','failed','unknown','suppressed')
+                 AND provenance_json IS NULL
                ORDER BY finished_at, created_at, execution_id
                LIMIT ?""",
             (excess,),
@@ -65,6 +89,7 @@ def _prune_terminal_unlocked(conn: sqlite3.Connection) -> None:
             """DELETE FROM deliveries WHERE execution_id IN (
                  SELECT execution_id FROM deliveries
                  WHERE status IN ('delivered','failed','unknown','suppressed')
+                   AND provenance_json IS NULL
                  ORDER BY finished_at, created_at, execution_id
                  LIMIT ?
                )""",
@@ -117,7 +142,8 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
              owner_started_at INTEGER,
              created_at TEXT NOT NULL,
              finished_at TEXT,
-             error TEXT
+             error TEXT,
+             provenance_json TEXT
            )"""
     )
     conn.execute(
@@ -132,6 +158,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         conn, "deliveries", "for_failure",
         "for_failure INTEGER NOT NULL DEFAULT 0",
     )
+    add_column_if_missing(conn, "deliveries", "provenance_json", "provenance_json TEXT")
 
 
 def _connect() -> sqlite3.Connection:
@@ -223,6 +250,48 @@ def get_status(execution_id: str) -> Optional[dict]:
     }
 
 
+def clear_persisted_provenance(execution_id: str, candidate: dict) -> None:
+    """Discard a receipt only after its state-store write succeeds."""
+    serialized = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
+    with _transaction() as conn:
+        conn.execute(
+            "UPDATE deliveries SET provenance_json=NULL "
+            "WHERE execution_id=? AND status='delivered' AND provenance_json=?",
+            (str(execution_id), serialized),
+        )
+
+
+def persist_confirmed_receipts() -> int:
+    """Complete receipts left by workers that exited before the gateway drained."""
+    from cron.executions import get_execution
+    from cron.reply_provenance import record_confirmed_delivery
+
+    with _transaction() as conn:
+        rows = conn.execute(
+            "SELECT execution_id, provenance_json FROM deliveries "
+            "WHERE status='delivered' AND provenance_json IS NOT NULL"
+        ).fetchall()
+    persisted = 0
+    for row in rows:
+        execution = get_execution(row["execution_id"])
+        if not execution or execution.get("status") != "completed":
+            continue
+        try:
+            candidate = json.loads(row["provenance_json"])
+        except (TypeError, ValueError):
+            continue
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("job_id") != execution.get("job_id")
+            or candidate.get("execution_id") != row["execution_id"]
+        ):
+            continue
+        if record_confirmed_delivery(candidate):
+            clear_persisted_provenance(row["execution_id"], candidate)
+            persisted += 1
+    return persisted
+
+
 def claim_next() -> Optional[dict]:
     """Atomically claim one pending send before touching the transport."""
     pid = os.getpid()
@@ -251,7 +320,10 @@ def claim_next() -> Optional[dict]:
     return result
 
 
-def _finish(execution_id: str, *, error: Optional[str], suppressed: bool = False) -> bool:
+def _finish(
+    execution_id: str, *, error: Optional[str], suppressed: bool = False,
+    provenance: Optional[dict] = None,
+) -> bool:
     status = "failed" if error else "suppressed" if suppressed else "delivered"
     safe_error = (
         redact_sensitive_text(str(error), force=True, redact_url_credentials=True)
@@ -260,13 +332,14 @@ def _finish(execution_id: str, *, error: Optional[str], suppressed: bool = False
     )
     with _transaction() as conn:
         cur = conn.execute(
-            """UPDATE deliveries SET status=?, finished_at=?, error=?
+            """UPDATE deliveries SET status=?, finished_at=?, error=?, provenance_json=?
                WHERE execution_id=? AND status='delivering'
                  AND owner_process_id=? AND owner_pid=?""",
             (
                 status,
                 _hermes_now().isoformat(),
                 safe_error,
+                json.dumps(provenance, ensure_ascii=False, sort_keys=True) if provenance else None,
                 execution_id,
                 _PROCESS_ID,
                 os.getpid(),
@@ -317,6 +390,7 @@ def drain(
 ) -> int:
     """Deliver pending rows through *send*, terminalizing every claimed row."""
     recover_abandoned()
+    persist_confirmed_receipts()
     processed = 0
     for _ in range(max(0, limit)):
         row = claim_next()
@@ -331,12 +405,16 @@ def drain(
                 )
             except BaseException as exc:
                 error = f"{type(exc).__name__}: {exc}"
-            _finish(row["execution_id"], error=error,
-                    suppressed=bool(row["job"].get("_notification_all_targets_suppressed")))
+            _finish(
+                row["execution_id"], error=error,
+                suppressed=bool(row["job"].get("_notification_all_targets_suppressed")),
+                provenance=row["job"].get("_cron_delivery_provenance") if not error else None,
+            )
         finally:
             with _lock:
                 _ACTIVE_DELIVERIES.discard(row["execution_id"])
         processed += 1
+    persist_confirmed_receipts()
     return processed
 
 

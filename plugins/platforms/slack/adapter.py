@@ -2234,7 +2234,8 @@ class SlackAdapter(BasePlatformAdapter):
                 # stay stuck on "is thinking..." (#24117).
                 return SendResult(success=True)
             thread_ts = self._resolve_thread_ts(reply_to, metadata)
-            last_result = await self._post_chunks(chat_id, team_id, content, formatted, thread_ts)
+            last_result, reply_root_ts = await self._post_chunks(
+                chat_id, team_id, content, formatted, thread_ts)
             # Clear Slack Assistant status as soon as the final message is posted.
             if thread_ts:
                 await self.stop_typing(chat_id, metadata=metadata)
@@ -2243,10 +2244,15 @@ class SlackAdapter(BasePlatformAdapter):
             sent_ts = last_result.get("ts") if last_result else None
             if sent_ts:
                 self._bot_message_ts.add(self._workspace_message_marker(team_id, sent_ts))
+                if reply_root_ts and reply_root_ts != sent_ts:
+                    self._bot_message_ts.add(self._workspace_message_marker(team_id, reply_root_ts))
                 if thread_ts:
                     self._bot_message_ts.add(self._workspace_message_marker(team_id, thread_ts))
                 self._trim_bot_message_timestamps()
-            return SendResult(success=True, message_id=sent_ts, raw_response=last_result)
+            raw = dict(_slack_response_payload(last_result))
+            if reply_root_ts and not thread_ts:
+                raw["_cron_reply_root_ts"] = reply_root_ts
+            return SendResult(success=True, message_id=sent_ts, raw_response=raw)
         except Exception as e:  # pragma: no cover - defensive logging
             # Clear the status even when the failure preceded thread_ts resolution:
             # stop_typing falls back to metadata / the uniquely tracked status.
@@ -2261,31 +2267,61 @@ class SlackAdapter(BasePlatformAdapter):
                 success=False, error=str(e), retryable=_retryable,
                 retry_after=self._retry_after_from_exc(e) if _retryable else None)
 
+    def outbound_reply_anchor(
+        self, send_result: Any, *, requested_thread_id: Optional[str] = None,
+    ) -> Optional[tuple[str, str]]:
+        # A reply inside an existing thread identifies only the root, not this cron post.
+        if requested_thread_id:
+            return None
+        raw = getattr(send_result, "raw_response", None)
+        root = raw.get("_cron_reply_root_ts") if isinstance(raw, dict) else None
+        return ("thread", str(root)) if root else None
+
+    def inbound_reply_anchor(self, event: MessageEvent) -> Optional[tuple[str, str]]:
+        raw = event.raw_message if isinstance(event.raw_message, dict) else {}
+        thread_ts = raw.get("thread_ts")
+        message_ts = raw.get("ts") or event.message_id
+        if not thread_ts or str(thread_ts) == str(message_ts or ""):
+            return None
+        return "thread", str(thread_ts)
+
     async def _post_chunks(
         self, chat_id: str, team_id: str, content: str, formatted: str, thread_ts: Optional[str]
     ) -> Any:
-        """``chat.postMessage`` each ``MAX_MESSAGE_LENGTH`` chunk; returns the last response.
-        Block Kit only for single-chunk messages (a >39k response is pathological for the 50-block /
-        3000-char limits); ``text`` stays the notification/accessibility fallback. With
-        ``reply_broadcast`` only the first chunk is also posted to the main channel."""
+        """Post chunks, threading continuations under the first post when top-level.
+
+        Return the last response and a root only if every chunk has a confirmed ts.
+        """
         chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
         broadcast = self.config.extra.get("reply_broadcast", False)
         blocks = self._maybe_blocks(content) if len(chunks) == 1 else None
         last_result = None
+        root_ts = None
+        anchor_valid = True
         for i, chunk in enumerate(chunks):
             kwargs = {
                 "channel": chat_id, "text": chunk,
                 "mrkdwn": True, **_slack_unfurl_kwargs(self.config.extra)}
             if blocks and i == 0:
                 kwargs["blocks"] = blocks
-            if thread_ts:
-                kwargs["thread_ts"] = thread_ts
+            destination_thread = thread_ts or (root_ts if i else None)
+            if destination_thread:
+                kwargs["thread_ts"] = destination_thread
                 if broadcast and i == 0:
                     kwargs["reply_broadcast"] = True
             client_fn = lambda: self._get_client(chat_id, team_id=team_id)  # noqa: E731
             last_result = await self._call_with_block_fallback(
                 client_fn, "chat_postMessage", kwargs, "send")
-        return last_result
+            sent_ts = last_result.get("ts") if hasattr(last_result, "get") else None
+            response = _slack_response_payload(last_result)
+            message = response.get("message")
+            observed_thread = message.get("thread_ts") if isinstance(message, dict) else None
+            if i == 0:
+                root_ts = sent_ts
+            if (not sent_ts or (i > 0 and not destination_thread)
+                    or (observed_thread and destination_thread and str(observed_thread) != str(destination_thread))):
+                anchor_valid = False
+        return last_result, root_ts if anchor_valid else None
 
     @staticmethod
     def _retry_after_from_exc(e: BaseException) -> Optional[float]:

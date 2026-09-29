@@ -562,6 +562,7 @@ class BuzzAdapter(BasePlatformAdapter):
         self._channel_names: Dict[str, str] = {}
         # channel_id -> raw ``channels list`` entry; drives DM-vs-channel classification.
         self._channel_meta: Dict[str, dict] = {}
+        self._dm_inventory_confirmed = False
         self._user_names: Dict[str, str] = {}
         self._member_cache: Dict[str, Tuple[float, List[str]]] = {}  # (monotonic, pubkeys)
         self._profile_name_cache: Dict[str, Tuple[float, str]] = {}
@@ -650,6 +651,8 @@ class BuzzAdapter(BasePlatformAdapter):
                 "connect_failed", message, "Buzz: failed to list channels — %s", message, retryable=code == 2
             )
         self._channel_names = {}
+        self._channel_meta = {}  # Do not treat a previous connection's inventory as current proof.
+        self._dm_inventory_confirmed = False
         for ch in _parse_json_list(out):
             if ch_id := ch.get("channel_id"):
                 self._channel_names[str(ch_id)] = str(ch.get("name") or ch_id)
@@ -703,6 +706,7 @@ class BuzzAdapter(BasePlatformAdapter):
         await cancel_task(self._poll_task)
         self._poll_task = None
         self._channel_state = {}
+        self._dm_inventory_confirmed = False
         self._poll_count = 0
 
     # ── Sending ───────────────────────────────────────────────────────────
@@ -824,6 +828,24 @@ class BuzzAdapter(BasePlatformAdapter):
             # Record event_meta so a thread reply to this send matches even if the echo never arrives.
             self._remember_event_meta(str(chat_id), result.message_id, self._self_pubkey, content)
         return result
+
+    def outbound_reply_anchor(
+        self, send_result: Any, *, requested_thread_id: Optional[str] = None,
+    ) -> Optional[tuple[str, str]]:
+        message_id = getattr(send_result, "message_id", None)
+        return ("message", str(message_id)) if message_id else None
+
+    def inbound_reply_anchor(self, event: MessageEvent) -> Optional[tuple[str, str]]:
+        # Only the explicit NIP-10 reply marker names an immediate parent. The general
+        # reply_to_message_id projection also falls back to a root-only tag, which must
+        # not make every later post in that thread a reply to a cron delivery.
+        raw = event.raw_message
+        if not isinstance(raw, dict):
+            return None
+        parents = [str(target).strip() for target, marker in _e_tags(raw)
+                   if marker.lower() == "reply" and isinstance(target, str) and target.strip()]
+        parent = parents[-1] if len(parents) == 1 else None
+        return ("message", parent) if parent and parent == event.reply_to_message_id else None
 
     def _reply_args(self, anchor: Optional[str]) -> List[str]:
         """``--reply-to`` CLI args for *anchor*, honoring ``reply_to_mode``."""
@@ -1220,6 +1242,27 @@ class BuzzAdapter(BasePlatformAdapter):
             except Exception:
                 logger.warning("Buzz: poll sweep failed", exc_info=True)
 
+    def chat_type_for_chat(self, chat_id: str) -> Optional[str]:
+        """Verified destination type from this connected relay's channel inventory and live state.
+
+        A configured watch ID or restored cursor alone is not proof of a public channel;
+        DMs can also appear in the relay's channels list as group-shaped entries.
+        """
+        if not self.is_connected:
+            return None
+        state = self._channel_state.get(str(chat_id))
+        if not state or str(chat_id) in self._restricted_channels:
+            return None
+        chat_type = state.get("chat_type")
+        if chat_type == "dm":
+            return "dm"
+        meta = self._channel_meta.get(str(chat_id))
+        if (chat_type == "group" and self._dm_inventory_confirmed and isinstance(meta, dict)
+                and str(meta.get("name") or "").strip()
+                and not self._may_reclassify_as_dm(str(chat_id))):
+            return "group"
+        return None
+
     def _new_channel_state(self, chat_type: str) -> dict:
         return {"chat_type": chat_type, "last_ts": 0, "seen": OrderedDict(), "event_meta": OrderedDict()}
 
@@ -1322,12 +1365,22 @@ class BuzzAdapter(BasePlatformAdapter):
         ``dms list`` is only a best-effort source: on some hosted relays it returns ``[]`` even when DM
         conversations exist (#68871).
         """
+        self._dm_inventory_confirmed = False
         code, out, _err = await self._run_cli(["dms", "list"])
-        for dm in _parse_json_list(out) if code == 0 else []:
-            dm_id = str(dm.get("dm_id") or "")
-            if dm_id and dm_id not in self._channel_state and dm_id not in self._restricted_channels:
-                await self._adopt_conversation(dm_id, seed)
+        dm_rows = _json_or(out, None) if code == 0 else None
+        valid_dms = isinstance(dm_rows, list) and all(
+            isinstance(dm, dict) and isinstance(dm.get("dm_id"), str) and dm["dm_id"].strip()
+            for dm in dm_rows
+        )
+        for dm in dm_rows if isinstance(dm_rows, list) and valid_dms else []:
+            dm_id = dm["dm_id"].strip()
+            if dm_id not in self._restricted_channels:
+                if dm_id in self._channel_state:
+                    self._channel_state[dm_id]["chat_type"] = "dm"
+                else:
+                    await self._adopt_conversation(dm_id, seed)
                 self._channel_names.setdefault(dm_id, "DM")
+        self._dm_inventory_confirmed = valid_dms
         code, out, _err = await self._run_cli(["channels", "list"])
         if code != 0:
             return

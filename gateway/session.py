@@ -19,6 +19,7 @@ from gateway.session_persistence import SessionPersistenceMixin, _DB_UNPINNED
 from gateway.session_recovery import SessionRecoveryMixin
 from gateway.session_lifecycle import SessionLifecycleMixin, _iso, _new_session_id, _now, _parse_iso
 from gateway.session_transcript import SessionTranscriptMixin
+from gateway.session_cron_reply import SessionCronReplyMixin
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,9 @@ class SessionSource:
     # over the authenticated relay WebSocket. ``platform`` is the UNDERLYING platform, not
     # ``relay``, so authz must key upstream trust off THIS flag.
     delivered_via_upstream_relay: bool = False
+    # Set only after the session store checks durable, exact public Buzz provenance.
+    # Deliberately absent from to_dict/from_dict: wire metadata cannot grant sharing.
+    public_buzz_thread_route: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         # Mirror scope_id/guild_id onto each other (scope_id wins) so readers of EITHER agree.
@@ -147,7 +151,7 @@ class SessionSource:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionSource":
-        plain = {
+        plain: Dict[str, Any] = {
             name: data.get(name)
             for name in cls._ALWAYS_FIELDS[1:] + cls._OPTIONAL_PRE_SCOPE + cls._OPTIONAL_POST_SCOPE + cls._OPTIONAL_TAIL
             if name != "chat_type"
@@ -629,6 +633,8 @@ def is_shared_multi_user_session(
     isolation rules in :func:`build_session_key`)."""
     if source.chat_type == "dm":
         return False
+    if source.platform.value == "buzz" and source.thread_id and source.public_buzz_thread_route:
+        return True
     return not (thread_sessions_per_user if source.thread_id else group_sessions_per_user)
 
 
@@ -671,7 +677,8 @@ def build_session_key(
     Slack ``scope_id`` precedes chat ids (Discord guild scope is deliberately NOT added, for key
     compatibility). DMs are isolated per chat_id, falling back to the sender id, then to one
     session per platform. Groups add the participant id only when ``group_sessions_per_user`` and
-    not in a thread (threads are shared unless ``thread_sessions_per_user``).
+    not in a thread (threads are shared unless ``thread_sessions_per_user``). An
+    exact, durably verified public Buzz thread is shared regardless of that setting.
     """
     is_dm = source.chat_type == "dm"
     chat_id = source.chat_id
@@ -687,9 +694,16 @@ def build_session_key(
         # chat_id-less DM shares one agent.
         isolate_user = not chat_id
     else:
-        # Threads are shared by default; per-user isolation only via thread_sessions_per_user or
-        # outside a thread.
-        isolate_user = group_sessions_per_user and not (thread_id and not thread_sessions_per_user)
+        # Only a durably identified public Buzz root overrides per-user isolation;
+        # ordinary and owner-bound Buzz threads keep the configured policy.
+        public_buzz_thread = (
+            source.platform.value == "buzz" and bool(source.thread_id)
+            and source.public_buzz_thread_route
+        )
+        isolate_user = not public_buzz_thread and (
+            (source.platform.value == "buzz" and not thread_id)
+            or (group_sessions_per_user and (not thread_id or thread_sessions_per_user))
+        )
     # Duck-typed sources may lack user_id_alt: read the participant only when it matters.
     participant_id = _canonical_participant(source) if (isolate_user or not is_dm) else None
 
@@ -789,8 +803,45 @@ class AsyncSessionStore:
 
 class SessionStore(
     SessionPersistenceMixin, SessionRecoveryMixin, SessionLifecycleMixin, SessionTranscriptMixin,
+    SessionCronReplyMixin,
 ):
     """Session routing index + transcripts: SQLite (SessionDB), legacy JSONL fallback."""
+
+    def _generate_session_key(self, source: SessionSource,
+                              key_source: Optional[SessionSource] = None) -> str:
+        """Choose a shared Buzz lane only from exact, durable public cron provenance."""
+        lane = key_source if key_source is not None else source
+        lane.public_buzz_thread_route = False
+        if (lane.platform.value == "buzz" and lane.chat_type != "dm" and lane.thread_id
+                and lane.chat_id and lane.user_id and len(str(lane.user_id)) == 64
+                and not set(str(lane.user_id)) - set("0123456789abcdef")):
+            profile = self._resolve_profile_for_key(source)
+            private_key = build_session_key(
+                lane, group_sessions_per_user=getattr(self.config, "group_sessions_per_user", True),
+                thread_sessions_per_user=getattr(self.config, "thread_sessions_per_user", False),
+                profile=profile)
+            db = self._db_for_key(private_key)
+            if db is not None:
+                try:
+                    def _public(conn):
+                        identity = (profile or "default", "buzz", str(lane.scope_id or ""),
+                                    str(lane.chat_id), str(lane.thread_id))
+                        pending = conn.execute(
+                            """SELECT owner_user_id FROM cron_delivery_provenance
+                               WHERE profile_name=? AND platform=? AND scope_id=? AND chat_id=?
+                                 AND thread_root=?""", identity).fetchall()
+                        owned = conn.execute(
+                            """SELECT owner_user_id FROM cron_reply_ownership
+                               WHERE profile_name=? AND platform=? AND scope_id=? AND chat_id=?
+                                 AND thread_id=?""", identity).fetchall()
+                        # A private receipt on this root makes the route ambiguous: never
+                        # broaden it merely because a public receipt is also present.
+                        rows = pending + owned
+                        return len(rows) == 1 and rows[0]["owner_user_id"] == ""
+                    lane.public_buzz_thread_route = bool(db._execute_write(_public))
+                except Exception:
+                    logger.warning("Buzz public thread lookup failed closed", exc_info=True)
+        return super()._generate_session_key(source, key_source)
 
     def __init__(self, sessions_dir: Path, config: GatewayConfig, has_active_processes_fn=None):
         self.sessions_dir = sessions_dir
@@ -800,7 +851,7 @@ class SessionStore(
         # A fallback-only initial load is reconciled with state.db once the handle recovers.
         self._routing_db_loaded = False
         self._routing_fallback_baseline: Optional[Dict[str, Any]] = None
-        self._lock = threading.Lock()  # guards _entries / _loaded only
+        self._lock = threading.RLock()  # route transitions may perform a guarded cron adoption
         self._save_lock = threading.Lock()  # whole-index persistence, never held with _lock
         # Fast (single-entry) and full saves share one generation counter so they are totally
         # ordered; _fast_persisted_entries: key -> (revision, entry_json) since the last rewrite.
@@ -1144,12 +1195,15 @@ class SessionStore(
                 source_value=old_entry.platform.value if old_entry.platform else "unknown",
                 display_name=old_entry.display_name, parent_session_id=old_entry.session_id,
             )
-        self._finish_route_transition(
-            session_key, end_session_id=old_entry.session_id, end_reason="session_reset",
-            create_kwargs=db_create_kwargs, origin=old_entry.origin,
-            display_name=new_entry.display_name, during=" during reset",
-        )
-        return new_entry
+            # Publish and terminate the predecessor under the same route lock. Otherwise a
+            # concurrent cron adoption can reopen that predecessor between these operations,
+            # only to have this delayed reset close the newly adopted conversation.
+            self._finish_route_transition(
+                session_key, end_session_id=old_entry.session_id, end_reason="session_reset",
+                create_kwargs=db_create_kwargs, origin=old_entry.origin,
+                display_name=new_entry.display_name, during=" during reset",
+            )
+            return new_entry
 
     def _replace_route_locked(self, session_key, old_entry, session_id, now, **fields) -> SessionEntry:
         """Publish a fresh entry (inheriting origin/platform/chat_type) and save. Lock held."""
@@ -1232,6 +1286,10 @@ class SessionStore(
             if is_internal_subagent_row(target):
                 logger.warning("Refusing route switch into internal subagent session %s", target_session_id)
                 return None
+        # Keep the route lock through the terminal DB transition. Publishing first and reopening
+        # outside the lock lets /new publish a fresh route and end this target, only for this
+        # delayed reopen to resurrect the reset conversation. Conversely, if /new wins the lock,
+        # expected_session_id rejects this stale switch before any lifecycle write.
         with self._lock:
             old_entry = self._entry_locked(session_key)
             if old_entry is None:
@@ -1244,26 +1302,34 @@ class SessionStore(
                 return None
             if old_entry.session_id == target_session_id:
                 return old_entry
+            if db is not None:
+                # The target must be reopened before a new route can see it. Failure is terminal
+                # for this attempt: never publish a route pointing at an ended target.
+                reopen = getattr(db, "reopen_session", None)
+                if not callable(reopen):
+                    logger.warning("Refusing route switch: target reopen unavailable")
+                    return None
+                try:
+                    reopen(target_session_id)
+                except Exception:
+                    logger.warning("Refusing route switch: target reopen failed", exc_info=True)
+                    return None
             new_entry = self._replace_route_locked(
                 session_key, old_entry, target_session_id, _now(),
                 display_name=old_entry.display_name,
             )
-
-        if self._db_for_key(session_key) and old_entry.session_id:
-            self._promote_session_reset(
-                session_key, old_entry.session_id, "session_switch",
-                log=lambda e: logger.debug("Session DB end_session failed: %s", e),
-            )
-        if self._db_for_key(session_key):
-            self._reopen_session_row(
-                session_key, target_session_id, log_prefix="Session DB reopen_session failed"
-            )
-            self._record_gateway_session_peer(
-                target_session_id, session_key, new_entry.origin,
-                display_name=new_entry.display_name, include_compression_ancestors=True,
-                transport_profile=new_entry.transport_profile,
-            )
-        return new_entry
+            if db is not None:
+                if old_entry.session_id:
+                    self._promote_session_reset(
+                        session_key, old_entry.session_id, "session_switch",
+                        log=lambda e: logger.debug("Session DB end_session failed: %s", e),
+                    )
+                self._record_gateway_session_peer(
+                    target_session_id, session_key, new_entry.origin,
+                    display_name=new_entry.display_name, include_compression_ancestors=True,
+                    transport_profile=new_entry.transport_profile,
+                )
+            return new_entry
 
     def list_sessions(self, active_minutes: Optional[int] = None) -> List[SessionEntry]:
         """List all sessions, optionally filtered by activity."""

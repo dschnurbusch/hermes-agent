@@ -238,6 +238,8 @@ class GatewayStatusCommandsMixin:
         from gateway.run import _AGENT_PENDING_SENTINEL
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         session_key = session_entry.session_key
         # Keep the sentinel distinct: a starting/pending run is not a usable agent for
         # model/context display, but it still occupies the session slot.
@@ -355,6 +357,8 @@ class GatewayStatusCommandsMixin:
         """
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         expanded = event.get_command_args().strip().lower() in {"all", "full", "details"}
         # Running agent first (mid-turn), then cached agent (between turns).
         agent = self._resident_agent_for(self._session_key_for_source(source)) or None
@@ -565,6 +569,9 @@ class GatewayStatusCommandsMixin:
         account/credit blocks; ``/usage reset [--force]`` redeems a banked Codex reset credit."""
         source = event.source
         session_key = self._session_key_for_source(source)
+        session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         raw_args = event.get_command_args().strip()
         args = [a.lower() for a in raw_args.split()] if raw_args else []
         wants_reset = bool(args) and args[0] == "reset"
@@ -628,7 +635,6 @@ class GatewayStatusCommandsMixin:
             return _with_account_blocks(lines)
 
         # No agent at all -- rough count from session history
-        session_entry = await self.async_session_store.get_or_create_session(source)
         try:
             history = await self.async_session_store.load_transcript(session_entry.session_id)
         except TranscriptReadError:

@@ -2035,7 +2035,9 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
     return final_response
 
 
-def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_session_id: str) -> None:
+def _finalize_cron_session(
+    session_db, agent, job_id: str, job_name: str, cron_session_id: str,
+) -> Optional[str]:
     """Title, classify, end and release the cron session after the agent turn has returned."""
     # Bound every DB op so storage failure cannot hold the dispatch guard.
     _session_db = _BoundedCronSessionDB(session_db, job_id)
@@ -2105,6 +2107,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
                 job_id, _lifecycle, _end_reason)
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': session lifecycle classification failed: %s", job_id, e)
+    finalized_session_id: Optional[str] = None
     try:
         _session_db.end_session(_final_cron_session_id, _end_reason)
         # The scheduler owns cron-session finalization. AIAgent.close() also
@@ -2115,6 +2118,14 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
         # _teardown_cron_agent.
         if agent is not None:
             agent._end_session_on_close = False
+        persisted = _session_db.get_session(_final_cron_session_id)
+        if (
+            _end_reason == "cron_complete"
+            and persisted
+            and persisted.get("ended_at") is not None
+            and persisted.get("end_reason") == "cron_complete"
+        ):
+            finalized_session_id = _final_cron_session_id
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': failed to end session: %s", job_id, e)
     try:
@@ -2122,6 +2133,7 @@ def _finalize_cron_session(session_db, agent, job_id: str, job_name: str, cron_s
         release_or_close(_session_db)
     except (Exception, KeyboardInterrupt) as e:
         logger.debug("Job '%s': failed to close SQLite session store: %s", job_id, e)
+    return finalized_session_id
 
 
 def _run_doc_header(job: dict, title: str, job_id: str, prompt: str) -> str:
@@ -2456,6 +2468,8 @@ def run_job(
     to the stored prompt for this fire only — never persisted to the job definition.
     """
     job_id = job["id"]
+    job.pop("_cron_run_session_id", None)
+    job.pop("_cron_delivery_provenance", None)
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 
     early, prompt = _prepare_job_prompt(job, job_id, job_name, extra_prompt, cancel_event)
@@ -2544,7 +2558,10 @@ def run_job(
             _worker_state.get("future"), _session_db, agent, job_id, job_name, _cron_session_id)
         scope.exit()
         if _session_db and not _worker_teardown_deferred:
-            _finalize_cron_session(_session_db, agent, job_id, job_name, _cron_session_id)
+            finalized = _finalize_cron_session(
+                _session_db, agent, job_id, job_name, _cron_session_id)
+            if finalized:
+                job["_cron_run_session_id"] = finalized
         # Tear down the ephemeral agent or the gateway leaks fds per tick (EMFILE). With deferred
         # teardown, hand the live agent back: delivery needs a live async client.
         # Release subprocesses, terminal sandboxes, browser daemons, and the main OpenAI/httpx client held
@@ -3020,6 +3037,9 @@ def _finish_completed_run(d: _RunDelivery, fire_owner: Optional[str], execution_
         from cron.jobs import update_job
         update_job(job["id"], {"last_delivery_queued": None})
         job["last_delivery_queued"] = None
+    provenance_candidate = job.pop("_cron_delivery_provenance", None)
+    job.pop("_cron_provenance_allowed", None)
+    job.pop("_cron_run_session_id", None)
     mark_kwargs: dict = {"delivery_error": d.delivery_error}
     if not d.success and job.pop("_model_unreachable", False):
         # Never-reached-the-model failure: schedule the Cowork-style bounded re-run
@@ -3043,6 +3063,14 @@ def _finish_completed_run(d: _RunDelivery, fire_owner: Optional[str], execution_
             execution_id, success=False,
             error="Fire claim ownership lost before terminal completion.")
         return True
+    if marked and provenance_candidate:
+        from cron.reply_provenance import record_confirmed_delivery
+        if record_confirmed_delivery(provenance_candidate) and job.get("last_delivery_queued"):
+            from cron.delivery_queue import clear_persisted_provenance
+            try:
+                clear_persisted_provenance(execution_id, provenance_candidate)
+            except Exception:
+                logger.warning("Job '%s': failed pruning persisted delivery receipt", job["id"], exc_info=True)
     delivery_outcome = _classify_delivery_outcome(
         delivery_error=d.delivery_error,
         delivery_queued=job.get("last_delivery_queued"),

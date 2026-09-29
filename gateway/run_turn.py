@@ -425,11 +425,91 @@ class GatewayTurnMixin:
                 source, touch_activity=not bool(getattr(event, "internal", False)),
             )
         session_key = session_entry.session_key
+
+        # Only a platform adapter can assert that this authenticated event is a direct reply.
+        # Exact durable provenance may then repoint the route to the completed cron run itself;
+        # any miss/refusal preserves the ordinary seeded or mirrored conversation.
+        if not strict_session and not getattr(event, "internal", False):
+            intake_adapter = self._intake_adapter_for(source)
+            anchor_reader = getattr(intake_adapter, "inbound_reply_anchor", None)
+            anchor = anchor_reader(event) if callable(anchor_reader) else None
+            if anchor:
+                from gateway.session_identity import identity_of
+                identity = identity_of(source)
+                if identity is not None:
+                    profile_name = identity.runtime_profile
+                else:
+                    from hermes_cli.profiles import get_active_profile_name
+                    profile_name = get_active_profile_name() or "default"
+                from gateway.session_cron_reply import private_cron_reply_route
+                # The exact owner lane is verified again against a durable binding below.
+                if not private_cron_reply_route(source, session_key, profile_name, config=self.session_store.config):
+                    anchor = None
+                if anchor:
+                    adopted = await self.async_session_store.adopt_cron_reply(
+                        session_key, expected_session_id=session_entry.session_id,
+                        profile_name=profile_name, platform=source.platform.value,
+                        scope_id=str(source.scope_id or ""), chat_id=str(source.chat_id),
+                        anchor_kind=str(anchor[0]), anchor_id=str(anchor[1]),
+                        user_id=str(source.user_id or ""),
+                        thread_id=str(source.thread_id or ""),
+                    )
+                    if adopted:
+                        session_entry, event._cron_reply_reservation = adopted
+                        logger.info(
+                            "Resumed cron transcript %s from direct reply on %s:%s",
+                            session_entry.session_id, source.platform.value, source.chat_id,
+                        )
+        # An unspent anchor can mark a half-switched route whose cron source was
+        # overwritten. Neither an owner nor a second participant may read/write it.
+        db = self.session_store._db_for_key(session_key)
+        if db is not None and await asyncio.to_thread(db.has_unconsumed_cron_delivery, session_entry.session_id):
+            logger.warning("Refusing pending cron adoption on %s", session_key)
+            return None
+        # Every group ingress, including restored, unanchored, and queued turns, checks
+        # immutable signed-owner provenance before the cron transcript can be loaded.
+        if source.chat_type != "dm" or source.thread_id:
+            db = self.session_store._db_for_key(session_key)
+            existing = await asyncio.to_thread(db.get_session, session_entry.session_id)
+            consumed = await asyncio.to_thread(db.is_consumed_cron_delivery, session_entry.session_id)
+            pending_anchor = await asyncio.to_thread(db.has_unconsumed_cron_delivery, session_entry.session_id)
+            if (existing and existing.get("source") == "cron") or consumed or pending_anchor:
+                from gateway.session import profile_from_session_key_namespace
+                from gateway.session_cron_reply import private_cron_reply_route
+                profile_name = profile_from_session_key_namespace(session_key.split(":", 2)[1])
+                permitted = (
+                    private_cron_reply_route(source, session_key, profile_name, config=self.session_store.config)
+                    and await asyncio.to_thread(
+                        db.owns_cron_reply_route, session_entry.session_id,
+                        session_key=session_key, profile_name=profile_name,
+                        platform=source.platform.value, scope_id=str(source.scope_id or ""),
+                        chat_id=str(source.chat_id or ""), thread_id=str(source.thread_id or ""),
+                        user_id=str(source.user_id or ""),
+                    )
+                )
+                if not permitted:
+                    logger.warning("Refusing unowned route to cron transcript on %s", session_key)
+                    return None
         if not strict_session and pinned_session_id:
             resolved_entry = await self._resolve_async_delegation_session(session_entry, pinned_session_id)
             if resolved_entry is None:
                 return
             session_entry = resolved_entry
+            if source.chat_type != "dm" or source.thread_id:
+                db = self.session_store._db_for_key(session_key)
+                if (await asyncio.to_thread(db.is_consumed_cron_delivery, session_entry.session_id)
+                        or await asyncio.to_thread(db.has_unconsumed_cron_delivery, session_entry.session_id)):
+                    from gateway.session import profile_from_session_key_namespace
+                    from gateway.session_cron_reply import private_cron_reply_route
+                    profile = profile_from_session_key_namespace(session_key.split(":", 2)[1])
+                    if (not private_cron_reply_route(source, session_key, profile, config=self.session_store.config)
+                            or not await asyncio.to_thread(db.owns_cron_reply_route,
+                                session_entry.session_id, session_key=session_key,
+                                profile_name=profile, platform=source.platform.value,
+                                scope_id=str(source.scope_id or ""), chat_id=str(source.chat_id or ""),
+                                thread_id=str(source.thread_id or ""), user_id=str(source.user_id or ""))):
+                        logger.warning("Refusing pinned unowned cron transcript on %s", session_key)
+                        return None
         self._cache_session_source(session_key, source)
         if await asyncio.to_thread(self._is_telegram_topic_lane, source):
             session_entry = await self._hmwa_heal_telegram_topic_binding(source, session_entry, session_key)
@@ -2125,7 +2205,27 @@ class GatewayTurnMixin:
             persist_user_display_kind, session_entry.session_id, owner,
         ), _session_env_tokens
 
+    async def _run_cron_reserved_agent(self, event, **kwargs):
+        from hermes_state_cron_delivery import cron_reply_reservation
+        token = cron_reply_reservation.set(getattr(event, "_cron_reply_reservation", None))
+        try:
+            return await self._run_agent(**kwargs)
+        finally:
+            cron_reply_reservation.reset(token)
+
     async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
+        """Own a cron reservation until the agent takes it or this turn exits."""
+        try:
+            return await self._handle_message_with_agent_inner(event, source, _quick_key, run_generation)
+        finally:
+            reservation = getattr(event, "_cron_reply_reservation", None)
+            if reservation:
+                session_id, holder = reservation
+                db = self.session_store._db_for_key(_quick_key)
+                if db is not None:
+                    await asyncio.to_thread(db.release_session_turn_lease, session_id, holder)
+
+    async def _handle_message_with_agent_inner(self, event, source, _quick_key: str, run_generation: int):
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
@@ -2170,8 +2270,8 @@ class GatewayTurnMixin:
             # Admission/typing is not execution. All routing, authorization and
             # turn preparation gates have passed when the agent runner is entered.
             event._heartbeat_execution_started = True
-            agent_result = await self._run_agent(
-                message=message_text, context_prompt=prepared.context_prompt, history=history, source=source,
+            agent_result = await self._run_cron_reserved_agent(
+                event, message=message_text, context_prompt=prepared.context_prompt, history=history, source=source,
                 session_id=_run_start_session_id, session_key=session_key,
                 run_generation=run_generation, event_message_id=self._reply_anchor_for_event(event),
                 inbound_message_id=str(event.message_id) if event.message_id else None,
@@ -3809,10 +3909,29 @@ class GatewayTurnMixin:
             try:
                 next_session_key = self._session_key_for_source(next_source)
             except Exception:
-                logger.debug(
-                    "Queued follow-up session-key resolution failed; reusing %s",
-                    session_key or "?", exc_info=True,
-                )
+                logger.warning("Dropping queued follow-up with unresolved session key", exc_info=True)
+                return result
+            if not session_key or next_session_key != session_key:
+                logger.warning("Dropping queued follow-up from another route")
+                return result
+            db = getattr(getattr(self, "session_store", None), "_db_for_key", lambda _: None)(session_key)
+            if db is not None and await asyncio.to_thread(db.has_unconsumed_cron_delivery, session_id):
+                logger.warning("Dropping queued turn for pending cron adoption on %s", session_key)
+                return result
+            if (db is not None and (next_source.chat_type != "dm" or next_source.thread_id)
+                    and await asyncio.to_thread(db.is_consumed_cron_delivery, session_id)):
+                from gateway.session import profile_from_session_key_namespace
+                from gateway.session_cron_reply import private_cron_reply_route
+                profile = profile_from_session_key_namespace(session_key.split(":", 2)[1])
+                if (not private_cron_reply_route(next_source, session_key, profile, config=self.session_store.config)
+                        or not await asyncio.to_thread(
+                            db.owns_cron_reply_route, session_id, session_key=session_key,
+                            profile_name=profile, platform=next_source.platform.value,
+                            scope_id=str(next_source.scope_id or ""), chat_id=str(next_source.chat_id or ""),
+                            thread_id=str(next_source.thread_id or ""), user_id=str(next_source.user_id or ""),
+                        )):
+                    logger.warning("Dropping unowned queued cron reply")
+                    return result
             next_message = await self._prepare_profile_scoped_inbound_message_text(
                 event=pending_event, source=next_source, history=updated_history, session_key=next_session_key,
             )
@@ -3863,16 +3982,23 @@ class GatewayTurnMixin:
         try:
             await self._refresh_agent_cache_message_count(session_key, session_id)
 
-            followup_result = await self._run_agent(
-                message=next_message, context_prompt=turn_ctx.context_prompt, history=updated_history,
-                source=next_source, session_id=session_id, session_key=next_session_key,
-                run_generation=run_generation, _interrupt_depth=_interrupt_depth + 1,
-                event_message_id=next_message_id, inbound_message_id=next_inbound_id,
-                channel_prompt=next_channel_prompt, message_type=next_message_type,
-                persist_user_message=next_persist_message,
-                persist_user_display_kind=next_display_kind,
-                persist_user_display_metadata=diagnostic_metadata(pending_event) or None,
-            )
+            # The reservation authorized only the reply's first turn. A queued follow-up is
+            # a new turn: it must acquire its own lease, not transfer the already-spent token.
+            from hermes_state_cron_delivery import cron_reply_reservation
+            reservation_token = cron_reply_reservation.set(None)
+            try:
+                followup_result = await self._run_agent(
+                    message=next_message, context_prompt=turn_ctx.context_prompt, history=updated_history,
+                    source=next_source, session_id=session_id, session_key=next_session_key,
+                    run_generation=run_generation, _interrupt_depth=_interrupt_depth + 1,
+                    event_message_id=next_message_id, inbound_message_id=next_inbound_id,
+                    channel_prompt=next_channel_prompt, message_type=next_message_type,
+                    persist_user_message=next_persist_message,
+                    persist_user_display_kind=next_display_kind,
+                    persist_user_display_metadata=diagnostic_metadata(pending_event) or None,
+                )
+            finally:
+                cron_reply_reservation.reset(reservation_token)
         except asyncio.CancelledError:
             await _run_followup_processing_hook(
                 _hook_adapter, pending_event, "on_processing_complete", _followup_cancel_outcome(_hook_adapter))

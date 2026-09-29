@@ -1042,9 +1042,13 @@ class GoogleChatAdapter(BasePlatformAdapter):
             if typing_msg_name == _TYPING_CONSUMED_SENTINEL:
                 typing_msg_name = None
             patched_typing = False
+            anchor_thread = None
+            anchor_valid = True
             for idx, chunk in enumerate(chunks):
-                # Only set thread on the create path; patch inherits.
-                body = _thread_body(chunk, thread_id if (idx > 0 or not typing_msg_name) else None)
+                # Continue in the actual first message's thread, not a fresh thread
+                # per chunk (or a stale last-inbound thread).
+                destination_thread = anchor_thread or thread_id
+                body = _thread_body(chunk, destination_thread if (idx > 0 or not typing_msg_name) else None)
                 try:
                     if idx == 0 and typing_msg_name:
                         last_result = await self._patch_message(typing_msg_name, body)
@@ -1065,6 +1069,10 @@ class GoogleChatAdapter(BasePlatformAdapter):
                             logger.info("[GoogleChat] Typing card disappeared; creating new message")
                             typing_msg_name = None
                             last_result = await self._create_message(chat_id, body)
+                            response = getattr(last_result, "raw_response", None)
+                            raw = response if isinstance(response, dict) else {}
+                            anchor_thread = (raw.get("thread") or {}).get("name")
+                            anchor_valid = bool(anchor_thread)
                             continue
                         logger.info("[GoogleChat] send target 404; skipping")
                         return SendResult(success=False, error="target not found")
@@ -1073,12 +1081,27 @@ class GoogleChatAdapter(BasePlatformAdapter):
                         if hits >= _RATE_LIMIT_WARN_THRESHOLD:
                             logger.warning("[GoogleChat] Rate limit hit %d times on chat; throttling", hits)
                     raise
+                response = getattr(last_result, "raw_response", None)
+                raw = response if isinstance(response, dict) else {}
+                observed_thread = (raw.get("thread") or {}).get("name")
+                if idx == 0:
+                    anchor_thread = observed_thread
+                if not observed_thread or observed_thread != anchor_thread or (
+                    thread_id and observed_thread != thread_id
+                ):
+                    anchor_valid = False
             if last_result is None:
                 return SendResult(success=False, error="empty message")
             # Sentinel keeps a trailing _keep_typing tick from posting a fresh marker that
             # stop_typing would then delete and tombstone. Cleared in on_processing_complete.
             if patched_typing:
                 self._typing_messages[chat_id] = _TYPING_CONSUMED_SENTINEL
+            # The last message's thread alone is not evidence that earlier chunks
+            # landed there. Persist only the verified common destination.
+            response = getattr(last_result, "raw_response", None)
+            if isinstance(response, dict):
+                last_result.raw_response = dict(response)
+                last_result.raw_response["_cron_reply_thread"] = anchor_thread if anchor_valid else None
             return last_result
         finally:
             self.resume_typing_for_chat(chat_id)
@@ -1167,7 +1190,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
             lambda: self._chat_api.spaces().messages().patch(name=message_name, updateMask=update_mask, body=patch_body)
             .execute(http=self._new_authed_http())
         )
-        return SendResult(success=True, message_id=resp.get("name", message_name))
+        return SendResult(success=True, message_id=resp.get("name", message_name), raw_response=resp)
 
     def _chunk_text(self, text: str) -> List[str]:
         chunks: List[str] = []
@@ -1252,7 +1275,22 @@ class GoogleChatAdapter(BasePlatformAdapter):
             op_name="messages.create",
         )
         self._track_outbound_thread(chat_id, resp)
-        return SendResult(success=True, message_id=resp.get("name"))
+        return SendResult(success=True, message_id=resp.get("name"), raw_response=resp)
+
+    def outbound_reply_anchor(
+        self, send_result: Any, *, requested_thread_id: Optional[str] = None,
+    ) -> Optional[tuple[str, str]]:
+        # Existing threads do not prove which child message the user meant.
+        if requested_thread_id:
+            return None
+        raw = getattr(send_result, "raw_response", None)
+        thread_name = raw.get("_cron_reply_thread") if isinstance(raw, dict) else None
+        return ("thread", str(thread_name)) if thread_name else None
+
+    def inbound_reply_anchor(self, event: MessageEvent) -> Optional[tuple[str, str]]:
+        raw = event.raw_message if isinstance(event.raw_message, dict) else {}
+        thread_name = ((raw.get("thread") or {}).get("name"))
+        return ("thread", str(thread_name)) if thread_name else None
 
     async def send_typing(self, chat_id: str, metadata: Any = None) -> None:
         """Post a visible 'Hermes is thinking…' marker (Chat has no typing API); ``send()``

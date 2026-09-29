@@ -71,6 +71,39 @@ from plugins.platforms.slack.adapter import (  # noqa: E402
 )
 
 
+@pytest.mark.asyncio
+async def test_cron_multichunk_anchor_is_first_root_and_children_share_thread():
+    adapter = object.__new__(SlackAdapter)
+    adapter.config = SimpleNamespace(extra={})
+    adapter._app = True
+    adapter._bot_message_ts = set()
+    adapter._trim_bot_message_timestamps = lambda: None
+    adapter._dm_target = AsyncMock(side_effect=lambda chat, metadata: chat)
+    adapter._metadata_team_id = lambda metadata: "T"
+    adapter._pop_slash_context = lambda *args: None
+    adapter._try_finalize_stream = AsyncMock(return_value=None)
+    adapter.format_message = lambda text: text
+    adapter.truncate_message = lambda text, limit: ["first", "second"]
+    adapter._maybe_blocks = lambda content: None
+    adapter._get_client = lambda *args, **kwargs: object()
+    adapter._call_with_block_fallback = AsyncMock(side_effect=[
+        _SdkLikeResponse({"ts": "100.1"}), _SdkLikeResponse({"ts": "100.2"})])
+    adapter._workspace_message_marker = lambda team, ts: (team, ts)
+
+    result = await adapter.send("C", "long", metadata={"job_id": "job"})
+    posted = [call.args[2] for call in adapter._call_with_block_fallback.await_args_list]
+    assert "thread_ts" not in posted[0]
+    assert posted[1]["thread_ts"] == "100.1"
+    assert result.message_id == "100.2"
+    assert adapter.outbound_reply_anchor(result) == ("thread", "100.1")
+    assert adapter.outbound_reply_anchor(result, requested_thread_id="old") is None
+
+    adapter._call_with_block_fallback = AsyncMock(side_effect=[
+        _SdkLikeResponse({}), _SdkLikeResponse({"ts": "101.2"})])
+    result = await adapter.send("C", "long", metadata={"job_id": "job"})
+    assert adapter.outbound_reply_anchor(result) is None
+
+
 class _SdkLikeResponse:
     """Stand-in for ``AsyncSlackResponse``: mapping-like, but not a ``dict``."""
 

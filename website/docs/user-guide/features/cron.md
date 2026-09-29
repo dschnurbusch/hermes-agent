@@ -719,6 +719,80 @@ Only the job's **own conversation** is ever touched:
   target a conversation. The global `mirror_delivery` flag alone never makes an
   explicitly-addressed chat continuable.
 
+**Public Buzz cron threads (full transcript):** Set the per-job
+`public_thread_continuation: true` on a job delivering to exactly one explicit Buzz
+channel target, such as `deliver: local,buzz:<channel-id>` (`local` is ignored
+for eligibility). `origin`, `all`, bare platform, mixed-platform, and
+`origin,buzz:<channel-id>` routes do not grant public access, even when target
+resolution deduplicates them. This is an intentional access grant: **any
+participant authorized by the Buzz adapter in that channel/thread can directly
+reply to the confirmed cron post and read/continue the *entire cron-run transcript***,
+including prompt, tool outputs, and follow-up turns, not merely its visible report.
+The route is bound to the exact profile, channel, and original NIP-10 thread
+root, never the first sender's pubkey. An output posted into an existing thread
+records its own post ID separately: initial adoption requires a direct reply to
+that post, not a sibling, while later replies stay on the original root.
+Subsequent messages by other authorized participants continue the same transcript,
+including after restart. Flat channel messages, other threads/channels/profiles,
+and unauthenticated senders cannot.
+The gateway's live Buzz adapter must positively verify the target as a group/channel
+from its authenticated relay inventory and watched channel state. A DM, unknown ID,
+disconnected adapter, or standalone fallback may still receive the output, but
+cannot grant transcript access; a captured job origin is not destination proof.
+Review the job's tools and data before enabling this on a shared channel. Set the
+field on the stored job with `hermes cron edit <job-id> --public-thread-continuation`
+under the intended profile, then verify the saved job before running it. No
+existing job is migrated automatically.
+
+Without this explicit job opt-in, `deliver: buzz:<channel-id>` still sends but
+does not grant transcript access, even when `attach_to_session: true` or global
+mirroring is enabled. `all` fanout remains fail-closed; a multi-target run cannot
+be claimed by one destination. Failure notices do not grant continuation.
+
+**Full cron transcript adoption** requires an authenticated direct reply to a
+confirmed cron output post. For Buzz, a gateway-captured signed pubkey on an
+`origin` delivery without the public opt-in binds the cron transcript to that owner
+and the exact channel thread root. Other senders cannot access that owner-bound run.
+`/new` starts a
+fresh conversation; it does not make the spent output anchor reusable. A shared
+channel is still a public *delivery destination*: do not put private report text
+in the output post itself. Slack and Google Chat group/thread adoption remains
+fail-closed because their outbound anchors alone do not provide a reliable
+recipient-owner binding. Private non-threaded DM direct replies remain eligible.
+
+For a safe **reply-continuation test job**, create it from an authenticated inbound
+Buzz conversation and use only `deliver: origin`; keep the captured `origin` with
+`platform: buzz`, the same `chat_id` as the destination, and the inbound sender's
+64-character lowercase hex pubkey as `user_id`. Use a harmless, non-sensitive
+prompt, a one-shot schedule, and an isolated test profile/home; do not target a
+shared channel for private output. A representative *fixture shape* (not a job to
+paste into a live `jobs.json`) is:
+
+```json
+{
+  "id": "test-buzz-origin-reply",
+  "schedule": "2026-10-01T12:00:00Z",
+  "prompt": "Reply with: Cron reply test; no private data.",
+  "deliver": "origin",
+  "failure_deliver": "local",
+  "attach_to_session": true,
+  "origin": {
+    "platform": "buzz",
+    "chat_id": "isolated-test-channel-id",
+    "chat_type": "group",
+    "user_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}
+```
+
+The fixture pubkey is synthetic and the example schedule must be replaced with a
+future one-shot time. A real test must use the gateway-captured sender identity,
+not substitute that literal. Confirm the sent event has a verified
+message ID and that a reply by the same authenticated sender resumes the cron
+session; a different sender or unanchored reply must not. Existing explicit Buzz
+jobs need an intentional `public_thread_continuation: true` update to share the
+full transcript; changing their delivery address or mirroring flag is insufficient.
+
 Broadcast expansions (`all`) are never made continuable. A user-written bare
 platform name (`deliver: slack`) addresses that platform's home channel
 deliberately and follows the same rules as the home-channel fallback above.

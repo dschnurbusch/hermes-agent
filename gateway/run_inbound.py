@@ -726,6 +726,35 @@ class GatewayInboundMixin:
         self._queue_or_replace_pending_event(_quick_key, event)
         return None
 
+    async def _hm_busy_cron_route_allowed(self, source: SessionSource, session_key: str) -> bool:
+        """Authorize a bound cron transcript before any busy-path command or follow-up."""
+        entry = await asyncio.to_thread(self.session_store.lookup_by_session_key, session_key)
+        if entry is None:
+            return True
+        db = self.session_store._db_for_key(session_key)
+        if db is None:
+            return True
+        sid = entry.session_id
+        pending = await asyncio.to_thread(db.has_unconsumed_cron_delivery, sid)
+        if pending:
+            return False
+        consumed = await asyncio.to_thread(db.is_consumed_cron_delivery, sid)
+        record = await asyncio.to_thread(db.get_session, sid)
+        if not consumed and not (record and record.get("source") == "cron"):
+            return True  # Ordinary routes retain their normal busy slash controls.
+        from gateway.session import profile_from_session_key_namespace
+        from gateway.session_cron_reply import private_cron_reply_route
+        profile = profile_from_session_key_namespace(session_key.split(":", 2)[1])
+        return bool(
+            private_cron_reply_route(source, session_key, profile, config=self.session_store.config)
+            and await asyncio.to_thread(
+                db.owns_cron_reply_route, sid, session_key=session_key,
+                profile_name=profile, platform=source.platform.value,
+                scope_id=str(source.scope_id or ""), chat_id=str(source.chat_id or ""),
+                thread_id=str(source.thread_id or ""), user_id=str(source.user_id or ""),
+            )
+        )
+
     def _hm_quick_commands(self) -> dict:
         """User-defined ``quick_commands`` mapping from config (empty dict when unset/malformed)."""
         cfg = self.config
@@ -1292,14 +1321,17 @@ class GatewayInboundMixin:
             return _paused_notice
 
         _quick_key = self._session_key_for_source(source)
-        _reply = await self._hm_pending_reply_intercepts(event, source, _quick_key)
-        if _reply is not None:
-            return _reply
-
         # Evict a leaked/reaped ``_running_agents`` slot before the busy-session fast-path.
         self._hm_evict_idle_stale_agent(_quick_key)
         if self._is_session_running(_quick_key):
             self._hm_evict_reaped_agent(_quick_key)
+        if self._is_session_running(_quick_key):
+            if not await self._hm_busy_cron_route_allowed(source, _quick_key):
+                logger.warning("Refusing busy ingress to unowned cron transcript on %s", _quick_key)
+                return "This cron transcript is not available from this route."
+        _reply = await self._hm_pending_reply_intercepts(event, source, _quick_key)
+        if _reply is not None:
+            return _reply
         if self._is_session_running(_quick_key):
             return await self._hm_handle_running_session_message(event, source, _quick_key)
 

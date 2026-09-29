@@ -1721,6 +1721,7 @@ def create_job(
     workdir: Optional[str] = None,
     no_agent: bool = False,
     attach_to_session: Optional[bool] = None,
+    public_thread_continuation: bool = False,
     monitor_script: Optional[str] = None,
     monitor_url: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
@@ -1759,6 +1760,8 @@ def create_job(
     f = {key: norm(raw[key]) for key, norm in _CREATE_FIELD_NORMALIZERS.items()}
     normalized_skills = _normalize_skill_list(skill, skills)
     normalized_attach = attach_to_session if isinstance(attach_to_session, bool) else None
+    if not isinstance(public_thread_continuation, bool):
+        raise ValueError("public_thread_continuation must be a boolean")
     normalized_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
 
     _validate_job_mode_invariants(f["monitor_script"], f["monitor_url"], f["no_agent"], f["script"])
@@ -1822,6 +1825,7 @@ def create_job(
     for key, value in (
         ("attach_to_session", normalized_attach), ("reasoning_effort", normalized_reasoning_effort),
         ("failure_deliver", f["failure_deliver"]),
+        ("public_thread_continuation", True if public_thread_continuation else None),
     ):
         if value is not None:
             job[key] = value
@@ -2002,6 +2006,8 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
     bad_fields = _IMMUTABLE_JOB_FIELDS.intersection(updates or {})
     if bad_fields:
         raise ValueError(f"Cron job field(s) cannot be updated: {', '.join(sorted(bad_fields))}")
+    if "public_thread_continuation" in updates and not isinstance(updates["public_thread_continuation"], bool):
+        raise ValueError("public_thread_continuation must be a boolean")
 
     def apply(jobs, i, job):
         _rederive_repeat_for_schedule_change(job, updates)

@@ -472,6 +472,8 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
         result["context_from"] = external_refs
     if isinstance(job.get("attach_to_session"), bool):
         result["attach_to_session"] = job["attach_to_session"]
+    if isinstance(job.get("public_thread_continuation"), bool):
+        result["public_thread_continuation"] = job["public_thread_continuation"]
     return result
 
 

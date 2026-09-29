@@ -274,10 +274,19 @@ def admit_durable_turn_lease(
             f"⏳ Still waiting for the other Hermes process on this session ({int(elapsed)}s)..."
         )
 
-    if not db.acquire_session_turn_lease(
-        session_id, holder, ttl_seconds=LEASE_TTL_SECONDS, wait_seconds=LEASE_WAIT_SECONDS,
-        on_wait=_on_wait, should_abort=lambda: getattr(agent, "_interrupt_requested", False),
-    ):
+    from hermes_state_cron_delivery import cron_reply_reservation
+    reservation = cron_reply_reservation.get()
+    if reservation is not None:
+        # A cron reply owns this exact reserved lease already. Never fall back to a normal
+        # wait/acquire if transfer fails: another writer or an expiry may have intervened.
+        admitted = (reservation[0] == session_id and
+                    db.transfer_cron_reply_reservation(session_id, reservation[1], holder))
+    else:
+        admitted = db.acquire_session_turn_lease(
+            session_id, holder, ttl_seconds=LEASE_TTL_SECONDS, wait_seconds=LEASE_WAIT_SECONDS,
+            on_wait=_on_wait, should_abort=lambda: getattr(agent, "_interrupt_requested", False),
+        )
+    if not admitted:
         admission.early_result = _lease_not_acquired_result(agent, session_id, conversation_history)
         return admission
 

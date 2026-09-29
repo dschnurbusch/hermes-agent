@@ -46,6 +46,7 @@ def _make_runner(session_entry: SessionEntry, *, platform: Platform = Platform.T
     )
     adapter = MagicMock()
     adapter.send = AsyncMock()
+    adapter.inbound_reply_anchor = lambda _event: None
     runner.adapters = {platform: adapter}
     runner._voice_mode = {}
     runner.hooks = SimpleNamespace(emit=AsyncMock(), loaded_hooks=False)
@@ -61,10 +62,12 @@ def _make_runner(session_entry: SessionEntry, *, platform: Platform = Platform.T
     runner._pending_messages = {}
     runner._pending_approvals = {}
     runner._session_db = AsyncSessionDB(MagicMock())
+    runner.session_store._db_for_key.return_value = runner._session_db._db
     runner._session_db._db.get_session_title.return_value = None
     # Default: no DB row → /status reports 0 tokens.  Tests that exercise
     # the populated path override this.
     runner._session_db._db.get_session.return_value = None
+    getattr(runner._session_db._db, "has_unconsumed_cron_delivery").return_value = False
     runner._reasoning_config = None
     runner._provider_routing = {}
     runner._fallback_model = None

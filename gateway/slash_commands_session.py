@@ -156,6 +156,14 @@ class GatewaySessionCommandsMixin:
         """Handle /new or /reset command."""
         source = event.source
         session_key = self._session_key_for_source(source)
+        # A Buzz thread key is shared by signed participants, but a private cron
+        # transcript belongs only to the captured delivery owner. Deny before
+        # interrupting, evicting, or rotating the shared route.
+        if source.platform.value == "buzz":
+            entry = self.session_store.lookup_by_session_key(session_key)
+            if entry is not None and not await self._cron_command_route_allowed(source, entry):
+                event._reset_route_denied = True  # type: ignore[attr-defined]
+                return "This cron transcript is not available from this route."
         self._invalidate_session_run_generation(session_key, reason="session_reset")
         # Evict the running-agent slot now that the generation is bumped: the in-flight run's own
         # guarded release (old generation) returns False and would leave a zombie slot that silently
@@ -351,6 +359,27 @@ class GatewaySessionCommandsMixin:
         """Whether *source* may resume session *target_id* (IDOR guard for every adapter).  The live
         origin decides when the target is active; otherwise the DB row must PROVE ownership or fail
         closed.  Admin ``--all`` bypasses."""
+        # An admin listing flag is not an owner grant for a private cron run.
+        # Check even when a live origin still exists, before its weaker chat comparison.
+        from gateway.session import profile_from_session_key_namespace
+        key = self._session_key_for_source(source)
+        db = self.session_store._db_for_key(key)
+        from hermes_state import SessionDB
+        if isinstance(db, SessionDB) and await asyncio.to_thread(db.has_unconsumed_cron_delivery, target_id):
+            return False  # Pending or stranded adoption; even the owner cannot read it yet.
+        if isinstance(db, SessionDB) and (await asyncio.to_thread(db.has_cron_reply_ownership, target_id)
+            or await asyncio.to_thread(db.is_consumed_cron_delivery, target_id)):
+            profile = profile_from_session_key_namespace(key.split(":", 2)[1])
+            return await asyncio.to_thread(
+                db.owns_cron_reply_route, target_id, session_key=key,
+                profile_name=profile, platform=source.platform.value,
+                scope_id=str(source.scope_id or ""), chat_id=str(source.chat_id or ""),
+                thread_id=str(source.thread_id or ""), user_id=str(source.user_id or ""),
+            )
+        if isinstance(db, SessionDB):
+            row = await asyncio.to_thread(db.get_session, target_id)
+            if row and row.get("source") == "cron":
+                return False
         if allow_override and self._resume_caller_is_admin(source):
             return True
         # Only a real SessionSource origin decides; unresolvable/error falls through to DB scoping.
@@ -369,14 +398,58 @@ class GatewaySessionCommandsMixin:
     async def _resume_row_visible(self, source: SessionSource, row: dict, allow_all: bool) -> bool:
         """Whether a listing *row* belongs to the caller's origin (blocks cross-origin enumeration of
         ids/previews); Matrix is room-scoped, ``--all`` needs a configured admin everywhere."""
+        sid = str(row.get("id") or "")
+        key = self._session_key_for_source(source)
+        db = self.session_store._db_for_key(key)
+        from hermes_state import SessionDB
+        if isinstance(db, SessionDB) and await asyncio.to_thread(db.has_unconsumed_cron_delivery, sid):
+            return False
+        if isinstance(db, SessionDB) and (await asyncio.to_thread(db.has_cron_reply_ownership, sid)
+            or await asyncio.to_thread(db.is_consumed_cron_delivery, sid)):
+            return await self._resume_target_allowed(source, sid)
+        if isinstance(db, SessionDB):
+            target = await asyncio.to_thread(db.get_session, sid)
+            if target and target.get("source") == "cron":
+                return False
         if allow_all and self._resume_caller_is_admin(source):
             return True
-        sid = str(row.get("id") or "")
         if source.platform == Platform.MATRIX:
             return self._same_matrix_room(source, self._gateway_session_origin_for_id(sid))
         return await self._resume_target_allowed(source, sid, allow_override=False)
 
     # ------------------------------------------------------------------ /retry, /undo
+
+    async def _cron_command_route_allowed(self, source, entry) -> bool:
+        """Slash commands must not read or mutate a legacy shared cron route."""
+        from gateway.session import profile_from_session_key_namespace
+        from gateway.session_cron_reply import private_cron_reply_route
+        from hermes_state import SessionDB
+        db_resolver = getattr(self.session_store, "_db_for_key", None)
+        if not callable(db_resolver):
+            return True  # Non-SQLite extension stores have no cron provenance ledger.
+        key = getattr(entry, "session_key", None)
+        if not key:
+            return False
+        db = db_resolver(key)
+        if not isinstance(db, SessionDB):
+            return True  # Non-SQLite extension stores have no cron provenance ledger.
+        try:
+            if await asyncio.to_thread(db.has_unconsumed_cron_delivery, entry.session_id):
+                return False  # Reservation is pending even if switch_session overwrote source.
+            owned = await asyncio.to_thread(db.has_cron_reply_ownership, entry.session_id)
+            consumed = await asyncio.to_thread(db.is_consumed_cron_delivery, entry.session_id)
+            row = await asyncio.to_thread(db.get_session, entry.session_id)
+            if not owned and not consumed and (not row or row.get("source") != "cron"):
+                return True
+            profile = profile_from_session_key_namespace(key.split(":", 2)[1])
+            return bool(private_cron_reply_route(source, key, profile, config=self.session_store.config)
+                and await asyncio.to_thread(db.owns_cron_reply_route, entry.session_id,
+                    session_key=key, profile_name=profile, platform=source.platform.value,
+                    scope_id=str(source.scope_id or ""), chat_id=str(source.chat_id or ""),
+                    thread_id=str(source.thread_id or ""), user_id=str(source.user_id or "")))
+        except Exception:
+            logger.warning("Slash cron transcript ownership lookup failed closed", exc_info=True)
+            return False
 
     async def _handle_retry_command(self, event: MessageEvent) -> str:
         """Handle /retry command - re-send the last user message."""
@@ -388,6 +461,8 @@ class GatewaySessionCommandsMixin:
 
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         try:
             history = await self.async_session_store.load_transcript(session_entry.session_id)
         except TranscriptReadError:
@@ -441,6 +516,8 @@ class GatewaySessionCommandsMixin:
             except ValueError:
                 return t("gateway.undo.invalid_count", arg=raw_args.split()[0])
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         result = await self.async_session_store.rewind_session(session_entry.session_id, n)
         if result is None:
             return t("gateway.undo.nothing")
@@ -505,6 +582,8 @@ class GatewaySessionCommandsMixin:
 
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         try:
             history = await self.async_session_store.load_transcript(session_entry.session_id)
         except TranscriptReadError:
@@ -723,6 +802,8 @@ class GatewaySessionCommandsMixin:
 
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         session_id = session_entry.session_id
         if not self._session_db:
             return "Session database not available."
@@ -764,6 +845,8 @@ class GatewaySessionCommandsMixin:
         """Handle /title command — set or show the current session's title."""
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, session_entry):
+            return "This cron transcript is not available from this route."
         session_id = session_entry.session_id
         if not self._session_db:
             return self._session_db_unavailable_reply()
@@ -843,9 +926,23 @@ class GatewaySessionCommandsMixin:
         return target_id, name
 
     async def _resume_access_denied_reply(self, source, target_id: str, name: str, allow_all: bool,
-                                          allow_cross_room: bool) -> Optional[str]:
+                                           allow_cross_room: bool) -> Optional[str]:
         """IDOR guard: a session id/title is a routing handle, not authority — bind /resume to the
         caller's own room (Matrix) or platform/user/chat (other adapters)."""
+        key = self._session_key_for_source(source)
+        db = self.session_store._db_for_key(key)
+        from hermes_state import SessionDB
+        if isinstance(db, SessionDB) and await asyncio.to_thread(db.has_unconsumed_cron_delivery, target_id):
+            return t("gateway.resume.blocked_not_owner", name=name)
+        if isinstance(db, SessionDB) and (await asyncio.to_thread(db.has_cron_reply_ownership, target_id)
+            or await asyncio.to_thread(db.is_consumed_cron_delivery, target_id)):
+            if not await self._resume_target_allowed(source, target_id):
+                return t("gateway.resume.blocked_not_owner", name=name)
+            return None
+        if isinstance(db, SessionDB):
+            target = await asyncio.to_thread(db.get_session, target_id)
+            if target and target.get("source") == "cron":
+                return t("gateway.resume.blocked_not_owner", name=name)
         if source.platform == Platform.MATRIX:
             target_origin = self._gateway_session_origin_for_id(target_id)
             if self._same_matrix_room(source, target_origin) or allow_cross_room:
@@ -986,8 +1083,7 @@ class GatewaySessionCommandsMixin:
             search_query=search_query,
             # Search filters in SQL: over-fetch so origin-invisible matches don't consume the page.
             limit=50 if search_query else 10, exclude_sources=["tool"])
-        if not cross_origin:
-            rows = [row for row in rows if await self._resume_row_visible(source, row, allow_all=False)]
+        rows = [row for row in rows if await self._resume_row_visible(source, row, allow_all=cross_origin)]
         rows = rows[:10]
         if search_query:
             title = f"Sessions matching “{search_query}”"
@@ -1014,6 +1110,8 @@ class GatewaySessionCommandsMixin:
         source = event.source
         session_key = self._session_key_for_source(source)
         current_entry = await self.async_session_store.get_or_create_session(source)
+        if not await self._cron_command_route_allowed(source, current_entry):
+            return "This cron transcript is not available from this route."
         try:
             history = await self.async_session_store.load_transcript(current_entry.session_id)
         except TranscriptReadError:

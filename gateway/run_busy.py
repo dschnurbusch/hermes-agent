@@ -990,6 +990,11 @@ class GatewayBusySessionMixin:
         return EphemeralReply(t("gateway.stop.stopped"))
 
     async def _busy_new_command(self, event: MessageEvent, quick_key: str, source):
+        if source.platform.value == "buzz":
+            entry = self.session_store.lookup_by_session_key(quick_key)
+            if entry is not None and not await self._cron_command_route_allowed(source, entry):
+                event._reset_route_denied = True  # type: ignore[attr-defined]
+                return "This cron transcript is not available from this route."
         # /reset and /new bypass the running-agent guard (else they'd queue as user text and replay
         # into the same broken history); clear pending messages so the old text doesn't replay.
         from gateway.run import _INTERRUPT_REASON_RESET

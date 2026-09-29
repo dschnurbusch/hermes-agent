@@ -1867,6 +1867,20 @@ class BasePlatformAdapter(ABC):
     # resolves the inbound profile via ``runner._profile_name_for_source``.
     gateway_runner = None  # type: ignore[assignment]
 
+    def outbound_reply_anchor(
+        self, send_result: Any, *, requested_thread_id: Optional[str] = None,
+    ) -> Optional[tuple[str, str]]:
+        """Exact anchor a future direct reply exposes, or ``None`` when unprovable.
+
+        Platform adapters opt in.  The core never guesses from a generic message id because
+        thread semantics differ and an existing thread cannot identify one child post.
+        """
+        return None
+
+    def inbound_reply_anchor(self, event: MessageEvent) -> Optional[tuple[str, str]]:
+        """Authenticated inbound event's exact direct-reply anchor, if the platform has one."""
+        return None
+
     def __init__(self, config: PlatformConfig, platform: Platform):
         self.config = config
         self.platform = platform
@@ -3899,12 +3913,22 @@ class BasePlatformAdapter(ABC):
         drain once."""
         logger.debug("[%s] Command '/%s' bypassing active-session guard for %s", self.name, cmd, session_key)
         current_guard = self._active_sessions.get(session_key)
+        event._reset_route_denied = False  # type: ignore[attr-defined]
         command_guard = asyncio.Event()
         self._active_sessions[session_key] = command_guard
         try:
             # Send BEFORE cancelling so cancellation side effects can't drop the "/new"
             # confirmation.
             await self._dispatch_inline_reply(event, log_cmd=cmd)
+            if getattr(event, "_reset_route_denied", False):
+                # The running owner still owns this lane; an unauthorized /new
+                # must not cancel its task or release its active-session guard.
+                if current_guard is not None:
+                    self._active_sessions[session_key] = current_guard
+                else:
+                    self._release_session_guard(session_key, guard=command_guard)
+                return
+            self._discard_text_debounce(session_key)
             await self.cancel_session_processing(session_key, release_guard=False, discard_pending=False)
         except Exception:
             # On failure restore the original guard so the session isn't left half-reset.
@@ -3975,7 +3999,6 @@ class BasePlatformAdapter(ABC):
             try:
                 # /stop, /new, /reset: cancel + response + drain; other bypasses don't cancel.
                 if cmd and is_interrupt_then_dispatch(cmd):
-                    self._discard_text_debounce(session_key)
                     await self._dispatch_active_session_command(event, session_key, cmd)
                 else:
                     logger.debug("[%s] Command '/%s' bypassing active-session guard for %s",

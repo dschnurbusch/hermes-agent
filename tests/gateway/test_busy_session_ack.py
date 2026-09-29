@@ -99,7 +99,7 @@ class TestBusySessionAck:
 
 
     @pytest.mark.asyncio
-    async def test_telegram_grace_followups_respect_queue_fifo(self, monkeypatch):
+    async def test_telegram_grace_followups_respect_queue_fifo(self, monkeypatch, tmp_path):
         """Rapid Telegram text follow-ups in queue mode must not merge."""
         from gateway.run import GatewayRunner
 
@@ -107,6 +107,9 @@ class TestBusySessionAck:
 
         runner, _sentinel = _make_runner()
         runner._busy_input_mode = "queue"
+        from gateway.config import GatewayConfig
+        from gateway.session import SessionStore
+        runner.session_store = SessionStore(tmp_path / "sessions", GatewayConfig())
         runner._queued_events = {}
         adapter = _make_adapter()
 
